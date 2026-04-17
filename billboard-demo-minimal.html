@@ -211,6 +211,13 @@
     #hud[data-collapsed="true"] .hud-tabs { display: none; }
     #hud[data-collapsed="true"] .hud-toggles { display: none; }
     #hud[data-collapsed="true"] .hud-panel { display: none !important; }
+    #hud[data-collapsed="true"] {
+      background: transparent;
+      padding: 0;
+      border-radius: 0;
+      max-width: none;
+    }
+    #hud[data-collapsed="true"] .hud-head { margin: 0; }
     #hud[data-collapsed="true"] #hud-toggle {
       background: rgba(150, 158, 172, 0.62);
       color: rgba(255,255,255,0.95);
