@@ -83,11 +83,13 @@
       -webkit-backdrop-filter: blur(8px);
     }
     #touch-music .tm-head {
+      position: relative;
       display: flex;
       align-items: center;
       justify-content: flex-start;
       gap: 8px;
       margin-bottom: 8px;
+      padding-right: 11px;
       color: rgba(255,255,255,0.9);
       font-weight: 600;
     }
@@ -102,16 +104,12 @@
       font: inherit;
     }
     #touch-music .tm-toggle:hover { background: rgba(255,255,255,0.14); }
-    /* Cap width so the strip stays “short” even when the record dot is hidden (display:none). */
     #touch-music .tm-tape-delay-wrap {
-      flex: 1 1 auto;
+      flex: 1;
       min-width: 0;
-      max-width: calc(100% - 4.5rem);
       display: flex;
       align-items: center;
       gap: 6px;
-      box-sizing: border-box;
-      padding-right: 4px;
     }
     #touch-music[data-collapsed="true"] .tm-tape-delay-wrap {
       display: none;
@@ -162,6 +160,7 @@
     }
     #touch-music[data-collapsed="true"] .tm-head {
       margin: 0;
+      padding-right: 0;
       justify-content: flex-start;
     }
     #touch-music[data-collapsed="true"] .tm-head > span { display: none; }
@@ -279,12 +278,13 @@
       box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.22);
     }
     #looper-record-indicator[hidden] { display: none !important; }
-    /* Touch-only: indicator sits in tm-head, vertically aligned with delay slider bar. */
+    /* Touch-only: dot pinned to panel head’s right edge; delay bar fills remaining width. */
     #touch-music .tm-wrap { position: relative; }
     #touch-music #looper-record-indicator {
-      position: static;
-      flex-shrink: 0;
-      align-self: center;
+      position: absolute;
+      right: -3px;
+      top: 50%;
+      transform: translateY(-50%);
       z-index: 2;
     }
     #touch-music[data-collapsed="true"] #looper-record-indicator { display: none !important; }
@@ -5103,7 +5103,7 @@
           if (!show) return;
           el.hidden = false;
 
-          // Touch-only: looper dot in tm-head (aligned with delay slider row).
+          // Touch-only: looper dot in tm-head (absolute right; slider uses flex:1 in remaining row).
           try {
             const ind = document.getElementById("looper-record-indicator");
             const head = el.querySelector(".tm-head");
