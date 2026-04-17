@@ -102,6 +102,51 @@
       font: inherit;
     }
     #touch-music .tm-toggle:hover { background: rgba(255,255,255,0.14); }
+    #touch-music .tm-tape-delay-wrap {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      margin-right: 20px;
+      gap: 6px;
+    }
+    #touch-music[data-collapsed="true"] .tm-tape-delay-wrap {
+      display: none;
+    }
+    #touch-music .tm-tape-delay {
+      width: 100%;
+      min-width: 0;
+      height: 6px;
+      border-radius: 3px;
+      appearance: none;
+      -webkit-appearance: none;
+      background: rgba(255,255,255,0.12);
+      outline: none;
+    }
+    #touch-music .tm-tape-delay::-webkit-slider-thumb {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: linear-gradient(145deg, #c9a06a, #8b6914);
+      border: 1px solid rgba(0,0,0,0.35);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+      cursor: pointer;
+    }
+    #touch-music .tm-tape-delay::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: linear-gradient(145deg, #c9a06a, #8b6914);
+      border: 1px solid rgba(0,0,0,0.35);
+      cursor: pointer;
+    }
+    #touch-music .tm-tape-delay::-moz-range-track {
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255,255,255,0.12);
+    }
     #touch-music[data-collapsed="true"] .tm-body { display: none; }
     #touch-music[data-collapsed="true"] {
       right: auto;
@@ -311,6 +356,21 @@
     <div class="tm-wrap" role="group" aria-label="Touch music controls">
       <div class="tm-head">
         <button type="button" class="tm-toggle" data-tm-toggle aria-label="Toggle music controls">x</button>
+        <label class="tm-tape-delay-wrap" aria-label="Tape delay">
+          <input
+            type="range"
+            id="tm-tape-delay"
+            class="tm-tape-delay"
+            min="0"
+            max="100"
+            value="0"
+            step="1"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+            aria-label="Tape delay, off when left"
+          />
+        </label>
       </div>
       <div class="tm-body">
         <div class="tm-section">
@@ -326,7 +386,7 @@
         </div>
         <div class="tm-section">
           <div class="tm-row">
-            <button type="button" class="tm-btn tm-btn--looper" data-tm-action="looper">Rec</button>
+            <button type="button" class="tm-btn tm-btn--looper" id="tm-looper-btn" data-tm-action="looper">Record</button>
             <button type="button" class="tm-btn tm-btn--overdub" data-tm-action="overdub">Overdub</button>
             <button type="button" class="tm-btn tm-btn--rand" data-tm-action="rand">Random</button>
             <button type="button" class="tm-btn" data-tm-action="clear">Clear</button>
@@ -2955,6 +3015,15 @@
           let npcConv = null;
           let npcWet = null;
           let recMonitor = null;
+          let tapeDelayIn = null;
+          let tapeDelayMerge = null;
+          let tapeDelayNode = null;
+          let tapeDelayFb = null;
+          let tapeDelayFbFilter = null;
+          let tapeDry = null;
+          let tapeWet = null;
+          let tapeFxOut = null;
+          let tapeDelayNorm = 0;
           const voices = new Map();
           /** If noteOff runs before async noteOnImpl (touch release before AudioContext resumes), remember to release. */
           const pendingReleaseVoiceIds = new Set();
@@ -3149,7 +3218,8 @@
             loopGainNode = ctx.createGain();
             loopGainNode.gain.value = 1.0;
             loopSource.connect(loopGainNode);
-            loopGainNode.connect(ctx.destination);
+            if (tapeDelayIn) loopGainNode.connect(tapeDelayIn);
+            else loopGainNode.connect(ctx.destination);
             const t = ctx.currentTime;
             loopSource.start(t, 0);
             loopScheduledStartTime = t;
@@ -3202,6 +3272,39 @@
             loopPlaying = true;
           }
 
+          function applyTapeDelayFromUi() {
+            if (!ctx || !tapeDelayNode || !tapeDry || !tapeWet || !tapeDelayFb) return;
+            const t = Math.max(0, Math.min(1, tapeDelayNorm));
+            const now = ctx.currentTime;
+            const delaySec = 0.006 + t * t * 0.88;
+            const fbAmt = t * 0.58;
+            try {
+              tapeDelayNode.delayTime.cancelScheduledValues(now);
+              tapeDelayNode.delayTime.setValueAtTime(Math.min(0.995, delaySec), now);
+            } catch (e) {}
+            try {
+              tapeDry.gain.setValueAtTime(1 - t * 0.4, now);
+              tapeWet.gain.setValueAtTime(t * 0.78, now);
+              tapeDelayFb.gain.setValueAtTime(fbAmt, now);
+            } catch (e) {}
+            try {
+              tapeDelayFbFilter.frequency.setValueAtTime(900 + (1 - t) * 3400, now);
+            } catch (e) {}
+          }
+
+          function setTapeDelayNorm(n) {
+            tapeDelayNorm = Math.max(0, Math.min(1, n));
+            ensure();
+            applyTapeDelayFromUi();
+            const el = document.getElementById("tm-tape-delay");
+            if (el) {
+              const pct = Math.round(tapeDelayNorm * 100);
+              try {
+                el.setAttribute("aria-valuenow", String(pct));
+              } catch (e) {}
+            }
+          }
+
           function ensure() {
             if (!ctx) {
               const AC = window.AudioContext || window.webkitAudioContext;
@@ -3244,6 +3347,36 @@
               npcDry.connect(npcMaster);
               npcConv.connect(npcWet);
               npcWet.connect(npcMaster);
+
+              tapeDelayIn = ctx.createGain();
+              tapeDelayIn.gain.value = 1;
+              tapeDelayMerge = ctx.createGain();
+              tapeDelayMerge.gain.value = 1;
+              tapeDelayNode = ctx.createDelay(1.0);
+              tapeDelayNode.delayTime.value = 0.02;
+              tapeDelayFb = ctx.createGain();
+              tapeDelayFb.gain.value = 0;
+              tapeDelayFbFilter = ctx.createBiquadFilter();
+              tapeDelayFbFilter.type = "lowpass";
+              tapeDelayFbFilter.frequency.value = 4200;
+              tapeDelayFbFilter.Q.value = 0.85;
+              tapeDry = ctx.createGain();
+              tapeDry.gain.value = 1;
+              tapeWet = ctx.createGain();
+              tapeWet.gain.value = 0;
+              tapeFxOut = ctx.createGain();
+              tapeFxOut.gain.value = 1;
+              playerMaster.connect(tapeDelayIn);
+              tapeDelayIn.connect(tapeDry);
+              tapeDry.connect(tapeFxOut);
+              tapeDelayIn.connect(tapeDelayMerge);
+              tapeDelayMerge.connect(tapeDelayNode);
+              tapeDelayNode.connect(tapeWet);
+              tapeWet.connect(tapeFxOut);
+              tapeDelayNode.connect(tapeDelayFb);
+              tapeDelayFb.connect(tapeDelayFbFilter);
+              tapeDelayFbFilter.connect(tapeDelayMerge);
+              applyTapeDelayFromUi();
 
               // ScriptProcessor runs on the main thread in Chromium; a larger buffer reduces crackle.
               recMonitor = ctx.createScriptProcessor(2048, 2, 2);
@@ -3316,6 +3449,7 @@
 
             if (loopPlaying) stopLoopPlayback();
             else startLoopPlayback();
+            syncLooperRecordIndicator();
           }
 
           function handleLooperDelete() {
@@ -3383,9 +3517,28 @@
             updateRecordingAudioRoute();
           }
 
+          function syncLooperButtonLabel() {
+            const btn = document.getElementById("tm-looper-btn");
+            if (!btn) return;
+            let label = "Record";
+            let aria = "Record loop";
+            if (loopPlaying) {
+              label = "Stop";
+              aria = "Stop loop playback";
+            } else if (loopBuffer && loopBuffer.length > 0 && !looperRecording) {
+              label = "Start";
+              aria = "Start loop playback";
+            }
+            btn.textContent = label;
+            btn.setAttribute("aria-label", aria);
+          }
+
           function syncLooperRecordIndicator() {
             const el = document.getElementById("looper-record-indicator");
-            if (!el) return;
+            if (!el) {
+              syncLooperButtonLabel();
+              return;
+            }
             const recording = looperRecording;
             const armed =
               !looperRecording &&
@@ -3409,24 +3562,25 @@
               el.removeAttribute("data-state");
               el.removeAttribute("aria-label");
             }
+            syncLooperButtonLabel();
           }
 
           /**
-           * Live monitoring stays on playerMaster → destination (low latency).
+           * Live monitoring: tapeFxOut (player + looper + delay) → destination (low latency).
            * While recording, a parallel muted ScriptProcessor tap captures into recChunks only.
            */
           function updateRecordingAudioRoute() {
             try {
-              if (!ctx || !playerMaster || !recMonitor) return;
+              if (!ctx || !tapeFxOut || !recMonitor) return;
               try {
-                playerMaster.disconnect();
+                tapeFxOut.disconnect();
               } catch (e) {}
               try {
                 recMonitor.disconnect();
               } catch (e) {}
-              playerMaster.connect(ctx.destination);
+              tapeFxOut.connect(ctx.destination);
               if (looperRecording) {
-                playerMaster.connect(recMonitor);
+                tapeFxOut.connect(recMonitor);
                 recMonitor.connect(ctx.destination);
               }
             } finally {
@@ -3980,7 +4134,8 @@
             unlock,
             triggerDrum,
             toggleOverdub,
-            randomizePlayerInstrument
+            randomizePlayerInstrument,
+            setTapeDelayNorm
           };
         })();
 
@@ -4972,6 +5127,27 @@
             toggleBtn.addEventListener("click", () => {
               collapsed = !(el.getAttribute("data-collapsed") === "true");
               applyCollapsed(collapsed);
+            });
+          }
+
+          const tapeDelayEl = document.getElementById("tm-tape-delay");
+          if (tapeDelayEl) {
+            function stopTapeDelayEvent(e) {
+              try {
+                e.stopPropagation();
+              } catch (err) {}
+            }
+            tapeDelayEl.addEventListener("pointerdown", stopTapeDelayEvent, true);
+            tapeDelayEl.addEventListener("pointermove", stopTapeDelayEvent, true);
+            tapeDelayEl.addEventListener("touchstart", stopTapeDelayEvent, { capture: true, passive: true });
+            tapeDelayEl.addEventListener("touchmove", stopTapeDelayEvent, { capture: true, passive: true });
+            tapeDelayEl.addEventListener("input", function () {
+              try {
+                tapeDelayEl.setAttribute("aria-valuenow", tapeDelayEl.value);
+              } catch (err) {}
+              try {
+                FmBellSynth.setTapeDelayNorm(parseFloat(tapeDelayEl.value) / 100);
+              } catch (err) {}
             });
           }
 
