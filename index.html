@@ -4009,7 +4009,7 @@
             } catch (e) {}
           }
 
-          /** Short cartoon boing via WebAudio (reliable on iOS WebKit; HTMLAudio jump clip often fails there). */
+          /** Fallback only if `sounds/jump-boing.mp3` fails to load/play (e.g. some mobile browsers). */
           function playJumpBoingSynth(baseVolume) {
             if (engineMuted) return;
             unlock();
@@ -5413,31 +5413,23 @@
           try {
             FmBellSynth.unlock();
           } catch (e) {}
-          let touchUi = false;
-          try {
-            touchUi =
-              window.matchMedia("(pointer: coarse)").matches ||
-              navigator.maxTouchPoints > 0;
-          } catch (e) {
-            touchUi = navigator.maxTouchPoints > 0;
-          }
-          if (touchUi) {
-            try {
-              FmBellSynth.playJumpBoingSynth(baseVolume);
-              return;
-            } catch (e) {}
-          }
           try {
             const a = new Audio(JUMP_BOING_SRC);
             a.setAttribute("playsinline", "");
             a.playsInline = true;
+            a.preload = "auto";
             jumpBoingAudios.push(a);
             const done = function () {
               const ix = jumpBoingAudios.indexOf(a);
               if (ix >= 0) jumpBoingAudios.splice(ix, 1);
             };
             a.addEventListener("ended", done);
-            a.addEventListener("error", done);
+            a.addEventListener("error", function () {
+              try {
+                FmBellSynth.playJumpBoingSynth(baseVolume);
+              } catch (e2) {}
+              done();
+            });
             a.volume = baseVolume * JUMP_BOING_QUIETER;
             a.playbackRate = 0.48 + Math.random() * Math.random() * 0.95 + Math.random() * 0.35;
             const p = a.play();
