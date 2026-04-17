@@ -1472,7 +1472,7 @@
           } else {
             const g = new THREE.Group();
             const geom = new THREE.SphereGeometry(p.radius, 32, 24);
-            const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const mat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
             const ball = new THREE.Mesh(geom, mat);
             g.add(ball);
             const outlineMat = new THREE.MeshBasicMaterial({
@@ -4864,6 +4864,8 @@
         })();
 
         function setupTouchMusicUi() {
+          // Disabled for now: ship without touch synth/pads, but keep global audio unlock for NPC chimes.
+          return;
           const el = document.getElementById("touch-music");
           if (!el) return;
           let show = false;
@@ -5753,12 +5755,16 @@
           panDir.subVectors(clickTarget, player.position).setY(0);
           const remainingDist = panDir.length();
           if (remainingDist < 0.06) {
-            const landY =
-              sampleSurfaceY(clickTarget.x, clickTarget.z) + playerHalfHeight;
+            const targetGroundY = sampleSurfaceY(clickTarget.x, clickTarget.z);
+            const landY = (targetGroundY == null ? player.position.y : targetGroundY + playerHalfHeight);
+            // Never snap down mid-jump: only write Y when we're effectively grounded.
+            const groundY = sampleSurfaceY(player.position.x, player.position.z);
+            const feetY = player.position.y - playerHalfHeight;
+            const grounded = groundY != null && feetY <= groundY + 0.18 && verticalVelocity <= 0.55;
             const prevX = player.position.x;
             const prevZ = player.position.z;
             const fixed = applyOneWayCliffCollision(prevX, prevZ, clickTarget.x, clickTarget.z);
-            player.position.set(fixed.x, landY, fixed.z);
+            player.position.set(fixed.x, grounded ? landY : player.position.y, fixed.z);
             hasClickTarget = false;
             return;
           }
@@ -5769,12 +5775,16 @@
           player.rotation.y = moveYaw;
           const step = speed * dt;
           if (step >= remainingDist) {
-            const landY =
-              sampleSurfaceY(clickTarget.x, clickTarget.z) + playerHalfHeight;
+            const targetGroundY = sampleSurfaceY(clickTarget.x, clickTarget.z);
+            const landY = (targetGroundY == null ? player.position.y : targetGroundY + playerHalfHeight);
+            // Never snap down mid-jump: only write Y when we're effectively grounded.
+            const groundY = sampleSurfaceY(player.position.x, player.position.z);
+            const feetY = player.position.y - playerHalfHeight;
+            const grounded = groundY != null && feetY <= groundY + 0.18 && verticalVelocity <= 0.55;
             const prevX = player.position.x;
             const prevZ = player.position.z;
             const fixed = applyOneWayCliffCollision(prevX, prevZ, clickTarget.x, clickTarget.z);
-            player.position.set(fixed.x, landY, fixed.z);
+            player.position.set(fixed.x, grounded ? landY : player.position.y, fixed.z);
             hasClickTarget = false;
           } else {
             const prevX = player.position.x;
