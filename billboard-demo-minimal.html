@@ -102,12 +102,16 @@
       font: inherit;
     }
     #touch-music .tm-toggle:hover { background: rgba(255,255,255,0.14); }
+    /* Cap width so the strip stays “short” even when the record dot is hidden (display:none). */
     #touch-music .tm-tape-delay-wrap {
-      flex: 1;
+      flex: 1 1 auto;
       min-width: 0;
+      max-width: calc(100% - 4.5rem);
       display: flex;
       align-items: center;
       gap: 6px;
+      box-sizing: border-box;
+      padding-right: 4px;
     }
     #touch-music[data-collapsed="true"] .tm-tape-delay-wrap {
       display: none;
