@@ -3452,10 +3452,38 @@
             return drumNoiseBuffer;
           }
 
+          /** Schedule WebAudio only after the context is running (avoids pile-ups when resume() is async). */
+          function withAudioRunning(cont) {
+            if (engineMuted) return;
+            ensure();
+            if (!ctx) return;
+            if (ctx.state === "running") {
+              cont();
+              return;
+            }
+            unlock();
+            const pr = ctx.resume();
+            const run = function () {
+              if (engineMuted || !ctx) return;
+              if (ctx.state === "running") cont();
+            };
+            if (pr && typeof pr.then === "function") {
+              pr.then(run).catch(run);
+            } else {
+              setTimeout(run, 0);
+            }
+          }
+
           function triggerDrum(kind) {
             if (engineMuted) return;
+            withAudioRunning(function () {
+              triggerDrumImpl(kind);
+            });
+          }
+
+          function triggerDrumImpl(kind) {
             const audio = ensure();
-            if (audio.state === "suspended") audio.resume();
+            if (!audio) return;
             beginLooperCaptureIfArmed();
             const t = audio.currentTime;
 
@@ -3635,8 +3663,14 @@
 
           function noteOn(voiceId, fc, bassKeyCode) {
             if (engineMuted) return;
+            withAudioRunning(function () {
+              noteOnImpl(voiceId, fc, bassKeyCode);
+            });
+          }
+
+          function noteOnImpl(voiceId, fc, bassKeyCode) {
             const audio = ensure();
-            if (audio.state === "suspended") audio.resume();
+            if (!audio) return;
             if (bassKeyCode && FM_BASS_HZ[bassKeyCode]) beginLooperCaptureIfArmed();
             if (voices.has(voiceId)) noteOff(voiceId);
 
@@ -3919,38 +3953,6 @@
             } catch (e) {}
           }
 
-          /** Fallback only if `sounds/jump-boing.mp3` fails to load/play (e.g. some mobile browsers). */
-          function playJumpBoingSynth(baseVolume) {
-            if (engineMuted) return;
-            unlock();
-            const audio = ensure();
-            if (!audio) return;
-            if (audio.state === "suspended") {
-              try {
-                audio.resume();
-              } catch (e) {}
-            }
-            const t0 = audio.currentTime;
-            function busConnect(g) {
-              g.connect(playerDry);
-              g.connect(playerConv);
-            }
-            const v = Math.max(0.02, Math.min(0.95, baseVolume * 0.52));
-            const osc = ctx.createOscillator();
-            osc.type = "sine";
-            const startHz = 395 + Math.random() * 85;
-            osc.frequency.setValueAtTime(startHz, t0);
-            osc.frequency.exponentialRampToValueAtTime(92, t0 + 0.12);
-            const g = ctx.createGain();
-            g.gain.setValueAtTime(0.0001, t0);
-            g.gain.exponentialRampToValueAtTime(v, t0 + 0.006);
-            g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2);
-            osc.connect(g);
-            busConnect(g);
-            osc.start(t0);
-            osc.stop(t0 + 0.22);
-          }
-
           return {
             noteOn,
             noteOff,
@@ -3961,8 +3963,7 @@
             unlock,
             triggerDrum,
             toggleOverdub,
-            randomizePlayerInstrument,
-            playJumpBoingSynth
+            randomizePlayerInstrument
           };
         })();
 
@@ -5369,27 +5370,12 @@
               if (ix >= 0) jumpBoingAudios.splice(ix, 1);
             };
             a.addEventListener("ended", done);
-            a.addEventListener("error", function () {
-              try {
-                FmBellSynth.playJumpBoingSynth(baseVolume);
-              } catch (e2) {}
-              done();
-            });
+            a.addEventListener("error", done);
             a.volume = baseVolume * JUMP_BOING_QUIETER;
             a.playbackRate = 0.48 + Math.random() * Math.random() * 0.95 + Math.random() * 0.35;
             const p = a.play();
-            if (p && typeof p.catch === "function") {
-              p.catch(function () {
-                try {
-                  FmBellSynth.playJumpBoingSynth(baseVolume);
-                } catch (e2) {}
-              });
-            }
-          } catch (e) {
-            try {
-              FmBellSynth.playJumpBoingSynth(baseVolume);
-            } catch (e2) {}
-          }
+            if (p && typeof p.catch === "function") p.catch(function () {});
+          } catch (e) {}
         }
 
         let verticalVelocity = 0;
