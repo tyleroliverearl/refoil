@@ -4999,6 +4999,7 @@
               return null;
             }
           }
+          const touchHeldBtnById = new Map(); // "t<identifier>" -> button element
           function onTouchStart(e) {
             stopEvent(e);
             const touches = e.changedTouches;
@@ -5006,7 +5007,15 @@
               const t = touches[i];
               const b = btnFromTouch(t);
               if (!b) continue;
-              handleDown(b, "t" + t.identifier);
+              const tid = "t" + t.identifier;
+              touchHeldBtnById.set(tid, b);
+              const action = b.getAttribute("data-tm-action");
+              // Sustain synth on hold; everything else triggers on release for reliability.
+              if (action === "synth") {
+                handleDown(b, tid);
+              } else {
+                b.setAttribute("data-pressed", "true");
+              }
             }
           }
           function onTouchEndOrCancel(e) {
@@ -5014,9 +5023,19 @@
             const touches = e.changedTouches;
             for (let i = 0; i < touches.length; i++) {
               const t = touches[i];
-              const b = btnFromTouch(t);
+              const tid = "t" + t.identifier;
+              const b = touchHeldBtnById.get(tid) || btnFromTouch(t);
               if (!b) continue;
-              handleUp(b, "t" + t.identifier);
+              touchHeldBtnById.delete(tid);
+              const action = b.getAttribute("data-tm-action");
+              if (action === "synth") {
+                handleUp(b, tid);
+              } else {
+                // Fire tap actions on release.
+                handleDown(b, tid);
+                // Clear pressed state.
+                b.removeAttribute("data-pressed");
+              }
             }
           }
 
