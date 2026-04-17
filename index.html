@@ -3030,6 +3030,8 @@
           let npcWet = null;
           let recMonitor = null;
           const voices = new Map();
+          /** If noteOff runs before async noteOnImpl (touch release before AudioContext resumes), remember to release. */
+          const pendingReleaseVoiceIds = new Set();
 
           let looperRecording = false;
           let looperArmed = false;
@@ -3550,10 +3552,24 @@
               return;
             }
             unlock();
+            try {
+              void ctx.resume();
+            } catch (e) {}
+            if (ctx.state === "running") {
+              cont();
+              return;
+            }
             const pr = ctx.resume();
             const run = function () {
               if (engineMuted || !ctx) return;
-              if (ctx.state === "running") cont();
+              if (ctx.state === "running") {
+                cont();
+                return;
+              }
+              requestAnimationFrame(function () {
+                if (engineMuted || !ctx) return;
+                if (ctx.state === "running") cont();
+              });
             };
             if (pr && typeof pr.then === "function") {
               pr.then(run).catch(run);
@@ -3913,11 +3929,18 @@
               if (lowWarm) vrec.lowWarm = lowWarm;
             }
             voices.set(voiceId, vrec);
+            if (pendingReleaseVoiceIds.has(voiceId)) {
+              pendingReleaseVoiceIds.delete(voiceId);
+              noteOff(voiceId);
+            }
           }
 
           function noteOff(voiceId) {
             const v = voices.get(voiceId);
-            if (!v) return;
+            if (!v) {
+              pendingReleaseVoiceIds.add(voiceId);
+              return;
+            }
             clearTimeout(v.stopTimer);
             const t = ctx.currentTime;
             const relBass = v.sub ? 0.22 : 0.07;
