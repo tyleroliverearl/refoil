@@ -4971,6 +4971,7 @@
           }
 
           function onPointerDown(e) {
+            if (e.pointerType === "touch") return; // touch events handle mobile taps
             const b = btnFromEvent(e);
             if (!b) return;
             stopEvent(e);
@@ -4979,6 +4980,7 @@
           }
 
           function onPointerUpOrCancel(e) {
+            if (e.pointerType === "touch") return;
             const b = btnFromEvent(e);
             if (!b) return;
             stopEvent(e);
