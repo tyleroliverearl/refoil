@@ -57,13 +57,14 @@
       margin: 0 1px;
     }
 
-    /* Touch music UI (right-side stack). */
+    /* Touch music UI (bottom dock). */
     #touch-music {
       position: fixed;
+      left: 12px;
       right: 12px;
-      top: 44px;
+      bottom: 12px;
       z-index: 97;
-      width: 184px;
+      width: auto;
       pointer-events: auto;
       user-select: none;
       -webkit-user-select: none;
@@ -100,10 +101,10 @@
       font: inherit;
     }
     #touch-music[data-collapsed="true"] .tm-body { display: none; }
-    #touch-music .tm-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 8px;
+    #touch-music .tm-grid { display: grid; gap: 8px; }
+    /* Synth row: 1–0 horizontally. */
+    #touch-music .tm-grid[data-tm-synth-grid] {
+      grid-template-columns: repeat(10, minmax(0, 1fr));
     }
     #touch-music .tm-section { margin: 8px 0 0; }
     #touch-music .tm-section:first-child { margin-top: 0; }
@@ -118,12 +119,12 @@
       border: 1px solid rgba(0,0,0,0.25);
       border-bottom-color: rgba(0,0,0,0.35);
       border-radius: 10px;
-      padding: 10px 10px;
-      min-height: 44px;
+      padding: 8px 8px;
+      min-height: 36px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font: 14px/1 system-ui, sans-serif;
+      font: 13px/1 system-ui, sans-serif;
       font-weight: 700;
       color: rgba(0,0,0,0.78);
       background: #d9dde5;
@@ -1497,7 +1498,7 @@
           } else {
             const g = new THREE.Group();
             const geom = new THREE.SphereGeometry(p.radius, 32, 24);
-            const mat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
             const ball = new THREE.Mesh(geom, mat);
             g.add(ball);
             const outlineMat = new THREE.MeshBasicMaterial({
@@ -4807,8 +4808,6 @@
         })();
 
         function setupTouchMusicUi() {
-          // Disabled for now: ship without touch synth/pads, but keep global audio unlock for NPC chimes.
-          return;
           const el = document.getElementById("touch-music");
           if (!el) return;
           let show = false;
