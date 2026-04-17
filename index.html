@@ -3147,7 +3147,9 @@
             peakGainSus: 0.9,
             outGain: 0.98,
             stereo: 0.86,
-            dR: 0.0051
+            dR: 0.0051,
+            /** ±cents spread on carrier/mod detune at note-on (default ~subtle). */
+            detuneCentsRange: 4.5
           };
 
           function randomizePlayerInstrument() {
@@ -3164,142 +3166,274 @@
             const pick = function (arr) {
               return arr[Math.floor(r() * arr.length)];
             };
-            // Keep perceived loudness relatively stable: randomize timbre a lot, volume only a little.
-            const roll = r();
+            // Twelve disjoint archetypes (equal weight): each sets the full patch so presets do not
+            // share the same narrow baseline (which made random hits sound same-y).
+            const id = Math.floor(r() * 12);
 
-            // Start from a "safe loud" baseline.
-            playerInst.modType = r() < 0.85 ? "sine" : "triangle";
-            playerInst.ampPeakScale = rr(0.92, 1.08);
-            playerInst.ampSus1Scale = rr(0.92, 1.08);
-            playerInst.ampSus2Scale = rr(0.9, 1.08);
-            playerInst.subScale = rr(0.82, 1.12);
-            playerInst.outGain = rr(0.95, 1.02);
-            playerInst.stereo = rr(0.82, 0.92);
-            playerInst.dR = rr(0.0041, 0.0072);
-
-            if (roll < 0.12) {
-              // Piano-ish: cleaner carrier, light FM, less drive, faster "pluck" feel via lower sustains.
+            if (id === 0) {
+              // Plucked piano / harp-like — light FM, fast decay.
               playerInst.carrierType = pick(["triangle", "sine"]);
-              playerInst.modRatio = rr(1.85, 3.35);
-              playerInst.indexScale = rr(0.28, 0.62);
-              playerInst.qScale = rr(0.78, 1.08);
-              playerInst.fOpenScale = rr(1.05, 1.35);
-              playerInst.fSusScale = rr(0.82, 1.02);
-              playerInst.driveAmt = rr(1.35, 2.35);
-              playerInst.peakFScale = rr(0.75, 1.15);
-              playerInst.peakQ = rr(0.9, 2.0);
-              playerInst.peakGainAtk = rr(0.25, 1.2);
-              playerInst.peakGainSus = rr(0.08, 0.55);
-              playerInst.ampSus1Scale *= rr(0.7, 0.92);
-              playerInst.ampSus2Scale *= rr(0.45, 0.8);
-              playerInst.subScale *= rr(0.65, 0.95);
-              playerInst.stereo = rr(0.78, 0.88);
-              playerInst.outGain = rr(0.96, 1.02);
-            } else if (roll < 0.22) {
-              // Bassoon-ish: reedy fundamental, darker filter, modest resonance, minimal stereo.
+              playerInst.modType = pick(["sine", "triangle"]);
+              playerInst.modRatio = rr(2.0, 3.8);
+              playerInst.indexScale = rr(0.22, 0.55);
+              playerInst.ampPeakScale = rr(0.94, 1.08);
+              playerInst.ampSus1Scale = rr(0.62, 0.88);
+              playerInst.ampSus2Scale = rr(0.38, 0.62);
+              playerInst.subScale = rr(0.62, 0.9);
+              playerInst.qScale = rr(0.75, 1.05);
+              playerInst.fOpenScale = rr(1.0, 1.38);
+              playerInst.fSusScale = rr(0.78, 1.02);
+              playerInst.driveAmt = rr(1.2, 2.2);
+              playerInst.peakFScale = rr(0.72, 1.12);
+              playerInst.peakQ = rr(0.85, 2.1);
+              playerInst.peakGainAtk = rr(0.2, 1.05);
+              playerInst.peakGainSus = rr(0.06, 0.42);
+              playerInst.outGain = rr(0.95, 1.02);
+              playerInst.stereo = rr(0.72, 0.86);
+              playerInst.dR = rr(0.0035, 0.0068);
+              playerInst.detuneCentsRange = rr(3, 12);
+            } else if (id === 1) {
+              // Reedy / bassoon — square-heavy, dark, narrow stereo.
               playerInst.carrierType = pick(["square", "triangle"]);
-              playerInst.modRatio = rr(0.85, 1.45);
-              playerInst.indexScale = rr(0.45, 1.05);
-              playerInst.qScale = rr(0.75, 1.18);
-              playerInst.fOpenScale = rr(0.55, 0.9);
-              playerInst.fSusScale = rr(0.65, 0.95);
-              playerInst.driveAmt = rr(1.65, 3.0);
-              playerInst.peakFScale = rr(0.55, 0.95);
-              playerInst.peakQ = rr(1.2, 2.8);
-              playerInst.peakGainAtk = rr(0.2, 1.6);
-              playerInst.peakGainSus = rr(0.12, 0.9);
-              playerInst.stereo = rr(0.72, 0.84);
-              playerInst.outGain = rr(0.96, 1.02);
-              playerInst.subScale *= rr(0.85, 1.15);
-            } else if (roll < 0.34) {
-              // Digital bright EP / DX-style tines (GM electric piano family).
               playerInst.modType = pick(["sine", "triangle"]);
-              playerInst.carrierType = pick(["triangle", "sine"]);
-              playerInst.modRatio = rr(2.6, 5.4);
-              playerInst.indexScale = rr(0.35, 0.82);
-              playerInst.qScale = rr(0.82, 1.12);
-              playerInst.fOpenScale = rr(1.12, 1.42);
-              playerInst.fSusScale = rr(0.72, 0.95);
-              playerInst.driveAmt = rr(1.55, 2.85);
-              playerInst.peakFScale = rr(0.88, 1.28);
-              playerInst.peakQ = rr(1.4, 2.9);
-              playerInst.peakGainAtk = rr(0.12, 0.55);
-              playerInst.peakGainSus = rr(0.06, 0.38);
-              playerInst.ampSus1Scale *= rr(0.62, 0.88);
-              playerInst.ampSus2Scale *= rr(0.38, 0.72);
-              playerInst.subScale *= rr(0.55, 0.88);
-              playerInst.stereo = rr(0.8, 0.9);
-              playerInst.outGain = rr(0.96, 1.02);
-            } else if (roll < 0.46) {
-              // String ensemble pad (slow body, dark filter bloom, wide stereo).
-              playerInst.modType = pick(["sine", "triangle"]);
-              playerInst.carrierType = pick(["sine", "triangle"]);
-              playerInst.modRatio = rr(0.32, 0.92);
-              playerInst.indexScale = rr(0.15, 0.48);
-              playerInst.qScale = rr(0.68, 1.05);
-              playerInst.fOpenScale = rr(0.42, 0.72);
-              playerInst.fSusScale = rr(0.92, 1.18);
-              playerInst.driveAmt = rr(1.25, 2.35);
-              playerInst.peakFScale = rr(0.55, 0.92);
-              playerInst.peakQ = rr(0.75, 1.85);
-              playerInst.peakGainAtk = rr(0.45, 1.85);
-              playerInst.peakGainSus = rr(0.35, 0.95);
-              playerInst.ampSus1Scale *= rr(0.95, 1.12);
-              playerInst.ampSus2Scale *= rr(0.88, 1.1);
-              playerInst.subScale *= rr(0.55, 0.82);
-              playerInst.stereo = rr(0.86, 0.93);
+              playerInst.modRatio = rr(0.72, 1.38);
+              playerInst.indexScale = rr(0.52, 1.15);
+              playerInst.ampPeakScale = rr(0.92, 1.06);
+              playerInst.ampSus1Scale = rr(0.78, 1.02);
+              playerInst.ampSus2Scale = rr(0.55, 0.88);
+              playerInst.subScale = rr(0.88, 1.18);
+              playerInst.qScale = rr(0.88, 1.28);
+              playerInst.fOpenScale = rr(0.48, 0.78);
+              playerInst.fSusScale = rr(0.58, 0.92);
+              playerInst.driveAmt = rr(1.85, 3.4);
+              playerInst.peakFScale = rr(0.48, 0.88);
+              playerInst.peakQ = rr(1.35, 3.2);
+              playerInst.peakGainAtk = rr(0.15, 1.45);
+              playerInst.peakGainSus = rr(0.12, 0.82);
               playerInst.outGain = rr(0.95, 1.02);
-            } else if (roll < 0.58) {
-              // Synth brass / GM trumpet–adjacent (bright attack, resonant peak).
-              playerInst.modType = pick(["sine", "triangle"]);
-              playerInst.carrierType = pick(["square", "sawtooth"]);
-              playerInst.modRatio = rr(1.05, 2.55);
-              playerInst.indexScale = rr(0.48, 1.12);
-              playerInst.qScale = rr(0.88, 1.22);
-              playerInst.fOpenScale = rr(0.95, 1.38);
-              playerInst.fSusScale = rr(0.72, 1.05);
-              playerInst.driveAmt = rr(2.1, 3.95);
-              playerInst.peakFScale = rr(0.82, 1.32);
-              playerInst.peakQ = rr(2.2, 4.4);
-              playerInst.peakGainAtk = rr(0.08, 0.42);
-              playerInst.peakGainSus = rr(0.18, 0.72);
-              playerInst.ampSus1Scale *= rr(0.75, 0.98);
-              playerInst.ampSus2Scale *= rr(0.55, 0.88);
-              playerInst.subScale *= rr(0.72, 1.05);
-              playerInst.stereo = rr(0.74, 0.86);
-              playerInst.outGain = rr(0.95, 1.02);
-            } else if (roll < 0.7) {
-              // Mallet / vibraphone / digital marimba (metallic FM, short decay).
-              playerInst.modType = pick(["sine", "triangle"]);
+              playerInst.stereo = rr(0.62, 0.78);
+              playerInst.dR = rr(0.0028, 0.0055);
+              playerInst.detuneCentsRange = rr(4, 14);
+            } else if (id === 2) {
+              // Bright DX EP — harmonic FM, tine attack.
               playerInst.carrierType = pick(["triangle", "sine"]);
-              playerInst.modRatio = rr(3.4, 6.8);
-              playerInst.indexScale = rr(0.42, 0.98);
-              playerInst.qScale = rr(0.78, 1.18);
+              playerInst.modType = pick(["triangle", "sine"]);
+              playerInst.modRatio = rr(3.2, 6.2);
+              playerInst.indexScale = rr(0.32, 0.92);
+              playerInst.ampPeakScale = rr(0.95, 1.1);
+              playerInst.ampSus1Scale = rr(0.58, 0.82);
+              playerInst.ampSus2Scale = rr(0.32, 0.58);
+              playerInst.subScale = rr(0.45, 0.78);
+              playerInst.qScale = rr(0.8, 1.15);
               playerInst.fOpenScale = rr(1.08, 1.48);
-              playerInst.fSusScale = rr(0.68, 0.95);
-              playerInst.driveAmt = rr(1.4, 2.65);
-              playerInst.peakFScale = rr(0.92, 1.38);
-              playerInst.peakQ = rr(1.6, 3.4);
-              playerInst.peakGainAtk = rr(0.1, 0.48);
-              playerInst.peakGainSus = rr(0.05, 0.32);
-              playerInst.ampSus1Scale *= rr(0.48, 0.72);
-              playerInst.ampSus2Scale *= rr(0.28, 0.55);
-              playerInst.subScale *= rr(0.5, 0.78);
-              playerInst.stereo = rr(0.82, 0.91);
-              playerInst.outGain = rr(0.96, 1.02);
+              playerInst.fSusScale = rr(0.65, 0.92);
+              playerInst.driveAmt = rr(1.35, 2.65);
+              playerInst.peakFScale = rr(0.92, 1.35);
+              playerInst.peakQ = rr(1.5, 3.2);
+              playerInst.peakGainAtk = rr(0.08, 0.48);
+              playerInst.peakGainSus = rr(0.04, 0.32);
+              playerInst.outGain = rr(0.95, 1.02);
+              playerInst.stereo = rr(0.78, 0.9);
+              playerInst.dR = rr(0.0042, 0.0075);
+              playerInst.detuneCentsRange = rr(5, 18);
+            } else if (id === 3) {
+              // String pad — very low FM, long body, wide image.
+              playerInst.carrierType = pick(["sine", "triangle"]);
+              playerInst.modType = "sine";
+              playerInst.modRatio = rr(0.22, 0.72);
+              playerInst.indexScale = rr(0.1, 0.38);
+              playerInst.ampPeakScale = rr(0.88, 1.02);
+              playerInst.ampSus1Scale = rr(0.98, 1.14);
+              playerInst.ampSus2Scale = rr(0.92, 1.1);
+              playerInst.subScale = rr(0.48, 0.75);
+              playerInst.qScale = rr(0.62, 0.98);
+              playerInst.fOpenScale = rr(0.38, 0.68);
+              playerInst.fSusScale = rr(1.0, 1.22);
+              playerInst.driveAmt = rr(1.05, 2.05);
+              playerInst.peakFScale = rr(0.5, 0.88);
+              playerInst.peakQ = rr(0.65, 1.65);
+              playerInst.peakGainAtk = rr(0.55, 2.0);
+              playerInst.peakGainSus = rr(0.4, 1.05);
+              playerInst.outGain = rr(0.94, 1.02);
+              playerInst.stereo = rr(0.84, 0.94);
+              playerInst.dR = rr(0.0055, 0.009);
+              playerInst.detuneCentsRange = rr(8, 28);
+            } else if (id === 4) {
+              // Synth brass — saw/square, resonant peak, punchy attack.
+              playerInst.carrierType = pick(["square", "sawtooth"]);
+              playerInst.modType = pick(["sine", "square"]);
+              playerInst.modRatio = rr(0.95, 2.45);
+              playerInst.indexScale = rr(0.55, 1.28);
+              playerInst.ampPeakScale = rr(0.92, 1.08);
+              playerInst.ampSus1Scale = rr(0.7, 0.95);
+              playerInst.ampSus2Scale = rr(0.48, 0.78);
+              playerInst.subScale = rr(0.68, 1.05);
+              playerInst.qScale = rr(0.92, 1.32);
+              playerInst.fOpenScale = rr(0.88, 1.35);
+              playerInst.fSusScale = rr(0.68, 1.02);
+              playerInst.driveAmt = rr(2.2, 4.2);
+              playerInst.peakFScale = rr(0.78, 1.28);
+              playerInst.peakQ = rr(2.5, 5.5);
+              playerInst.peakGainAtk = rr(0.06, 0.38);
+              playerInst.peakGainSus = rr(0.15, 0.68);
+              playerInst.outGain = rr(0.94, 1.02);
+              playerInst.stereo = rr(0.7, 0.86);
+              playerInst.dR = rr(0.0038, 0.0065);
+              playerInst.detuneCentsRange = rr(6, 20);
+            } else if (id === 5) {
+              // Metallic mallet — high inharmonic ratio, short ring.
+              playerInst.carrierType = pick(["triangle", "sine"]);
+              playerInst.modType = pick(["sine", "triangle", "square"]);
+              playerInst.modRatio = rr(4.2, 8.5);
+              playerInst.indexScale = rr(0.38, 1.05);
+              playerInst.ampPeakScale = rr(0.95, 1.1);
+              playerInst.ampSus1Scale = rr(0.42, 0.68);
+              playerInst.ampSus2Scale = rr(0.22, 0.48);
+              playerInst.subScale = rr(0.38, 0.68);
+              playerInst.qScale = rr(0.75, 1.2);
+              playerInst.fOpenScale = rr(1.05, 1.55);
+              playerInst.fSusScale = rr(0.58, 0.88);
+              playerInst.driveAmt = rr(1.25, 2.45);
+              playerInst.peakFScale = rr(0.95, 1.42);
+              playerInst.peakQ = rr(1.8, 4.2);
+              playerInst.peakGainAtk = rr(0.08, 0.42);
+              playerInst.peakGainSus = rr(0.04, 0.28);
+              playerInst.outGain = rr(0.95, 1.02);
+              playerInst.stereo = rr(0.8, 0.92);
+              playerInst.dR = rr(0.0045, 0.008);
+              playerInst.detuneCentsRange = rr(4, 16);
+            } else if (id === 6) {
+              // Acid squelch — saw, low ratio, screaming filter, heavy drive.
+              playerInst.carrierType = "sawtooth";
+              playerInst.modType = pick(["sine", "triangle"]);
+              playerInst.modRatio = rr(0.42, 1.05);
+              playerInst.indexScale = rr(0.75, 1.55);
+              playerInst.ampPeakScale = rr(0.92, 1.08);
+              playerInst.ampSus1Scale = rr(0.72, 0.98);
+              playerInst.ampSus2Scale = rr(0.52, 0.88);
+              playerInst.subScale = rr(0.85, 1.2);
+              playerInst.qScale = rr(1.05, 1.45);
+              playerInst.fOpenScale = rr(0.92, 1.32);
+              playerInst.fSusScale = rr(0.52, 0.78);
+              playerInst.driveAmt = rr(3.8, 6.5);
+              playerInst.peakFScale = rr(0.72, 1.18);
+              playerInst.peakQ = rr(2.0, 4.8);
+              playerInst.peakGainAtk = rr(0.35, 2.4);
+              playerInst.peakGainSus = rr(0.25, 1.15);
+              playerInst.outGain = rr(0.93, 1.0);
+              playerInst.stereo = rr(0.72, 0.88);
+              playerInst.dR = rr(0.0032, 0.006);
+              playerInst.detuneCentsRange = rr(10, 32);
+            } else if (id === 7) {
+              // Square rubber bass — digital GM-ish low end.
+              playerInst.carrierType = "square";
+              playerInst.modType = pick(["sine", "triangle"]);
+              playerInst.modRatio = rr(0.38, 0.95);
+              playerInst.indexScale = rr(0.62, 1.35);
+              playerInst.ampPeakScale = rr(0.94, 1.1);
+              playerInst.ampSus1Scale = rr(0.82, 1.05);
+              playerInst.ampSus2Scale = rr(0.62, 0.92);
+              playerInst.subScale = rr(1.0, 1.22);
+              playerInst.qScale = rr(0.78, 1.18);
+              playerInst.fOpenScale = rr(0.65, 1.05);
+              playerInst.fSusScale = rr(0.72, 1.08);
+              playerInst.driveAmt = rr(2.0, 3.8);
+              playerInst.peakFScale = rr(0.58, 1.02);
+              playerInst.peakQ = rr(1.2, 3.0);
+              playerInst.peakGainAtk = rr(0.12, 0.95);
+              playerInst.peakGainSus = rr(0.18, 0.75);
+              playerInst.outGain = rr(0.94, 1.0);
+              playerInst.stereo = rr(0.65, 0.82);
+              playerInst.dR = rr(0.0025, 0.005);
+              playerInst.detuneCentsRange = rr(5, 16);
+            } else if (id === 8) {
+              // 8-bit / chip thin — square both, integer-ish ratios, dry filter.
+              playerInst.carrierType = "square";
+              playerInst.modType = "square";
+              playerInst.modRatio = pick([2, 3, 4, 5, 6]) + rr(-0.08, 0.08);
+              playerInst.indexScale = rr(0.18, 0.48);
+              playerInst.ampPeakScale = rr(0.9, 1.05);
+              playerInst.ampSus1Scale = rr(0.55, 0.82);
+              playerInst.ampSus2Scale = rr(0.35, 0.62);
+              playerInst.subScale = rr(0.35, 0.62);
+              playerInst.qScale = rr(0.55, 0.88);
+              playerInst.fOpenScale = rr(0.42, 0.72);
+              playerInst.fSusScale = rr(0.55, 0.82);
+              playerInst.driveAmt = rr(1.1, 2.2);
+              playerInst.peakFScale = rr(0.85, 1.25);
+              playerInst.peakQ = rr(1.0, 2.6);
+              playerInst.peakGainAtk = rr(0.15, 0.85);
+              playerInst.peakGainSus = rr(0.08, 0.45);
+              playerInst.outGain = rr(0.95, 1.02);
+              playerInst.stereo = rr(0.68, 0.84);
+              playerInst.dR = rr(0.002, 0.0045);
+              playerInst.detuneCentsRange = rr(2, 8);
+            } else if (id === 9) {
+              // Detuned supersaw-ish — wide cents, saw + triangle mod.
+              playerInst.carrierType = "sawtooth";
+              playerInst.modType = "triangle";
+              playerInst.modRatio = rr(1.0, 2.2);
+              playerInst.indexScale = rr(0.45, 0.95);
+              playerInst.ampPeakScale = rr(0.92, 1.06);
+              playerInst.ampSus1Scale = rr(0.78, 1.02);
+              playerInst.ampSus2Scale = rr(0.58, 0.88);
+              playerInst.subScale = rr(0.55, 0.88);
+              playerInst.qScale = rr(0.85, 1.22);
+              playerInst.fOpenScale = rr(1.0, 1.42);
+              playerInst.fSusScale = rr(0.78, 1.12);
+              playerInst.driveAmt = rr(2.4, 4.5);
+              playerInst.peakFScale = rr(0.88, 1.32);
+              playerInst.peakQ = rr(1.6, 3.8);
+              playerInst.peakGainAtk = rr(0.2, 1.6);
+              playerInst.peakGainSus = rr(0.2, 0.95);
+              playerInst.outGain = rr(0.93, 1.0);
+              playerInst.stereo = rr(0.82, 0.94);
+              playerInst.dR = rr(0.006, 0.009);
+              playerInst.detuneCentsRange = rr(28, 55);
+            } else if (id === 10) {
+              // Sub dub — sine carrier, minimal FM, huge sub.
+              playerInst.carrierType = "sine";
+              playerInst.modType = "sine";
+              playerInst.modRatio = rr(0.28, 0.62);
+              playerInst.indexScale = rr(0.12, 0.38);
+              playerInst.ampPeakScale = rr(0.9, 1.05);
+              playerInst.ampSus1Scale = rr(0.88, 1.08);
+              playerInst.ampSus2Scale = rr(0.72, 0.98);
+              playerInst.subScale = rr(1.08, 1.22);
+              playerInst.qScale = rr(0.65, 0.95);
+              playerInst.fOpenScale = rr(0.55, 0.88);
+              playerInst.fSusScale = rr(0.88, 1.15);
+              playerInst.driveAmt = rr(1.05, 2.05);
+              playerInst.peakFScale = rr(0.48, 0.82);
+              playerInst.peakQ = rr(0.7, 1.6);
+              playerInst.peakGainAtk = rr(0.35, 1.4);
+              playerInst.peakGainSus = rr(0.25, 0.85);
+              playerInst.outGain = rr(0.95, 1.02);
+              playerInst.stereo = rr(0.58, 0.75);
+              playerInst.dR = rr(0.002, 0.004);
+              playerInst.detuneCentsRange = rr(3, 10);
             } else {
-              // Default bass/synth exploration (still volume-safe).
-              playerInst.carrierType = pick(["sawtooth", "square", "triangle"]);
-              playerInst.modRatio = rr(0.55, 3.25);
-              playerInst.indexScale = rr(0.55, 1.65);
-              playerInst.qScale = rr(0.72, 1.28);
-              playerInst.fOpenScale = rr(0.72, 1.35);
-              playerInst.fSusScale = rr(0.72, 1.25);
-              playerInst.driveAmt = rr(1.75, 4.8);
-              playerInst.peakFScale = rr(0.65, 1.35);
-              playerInst.peakQ = rr(1.1, 3.6);
-              playerInst.peakGainAtk = rr(0.35, 2.8);
-              playerInst.peakGainSus = rr(0.2, 1.4);
+              // Bright digital lead — saw + square mod, high harmonics, forward peak.
+              playerInst.carrierType = pick(["sawtooth", "square"]);
+              playerInst.modType = pick(["square", "sine"]);
+              playerInst.modRatio = rr(2.2, 5.0);
+              playerInst.indexScale = rr(0.55, 1.45);
+              playerInst.ampPeakScale = rr(0.94, 1.1);
+              playerInst.ampSus1Scale = rr(0.68, 0.95);
+              playerInst.ampSus2Scale = rr(0.48, 0.82);
+              playerInst.subScale = rr(0.52, 0.88);
+              playerInst.qScale = rr(0.92, 1.35);
+              playerInst.fOpenScale = rr(1.05, 1.52);
+              playerInst.fSusScale = rr(0.72, 1.08);
+              playerInst.driveAmt = rr(2.6, 5.2);
+              playerInst.peakFScale = rr(0.95, 1.42);
+              playerInst.peakQ = rr(2.2, 5.0);
+              playerInst.peakGainAtk = rr(0.12, 0.72);
+              playerInst.peakGainSus = rr(0.12, 0.62);
+              playerInst.outGain = rr(0.93, 1.0);
+              playerInst.stereo = rr(0.75, 0.9);
+              playerInst.dR = rr(0.004, 0.007);
+              playerInst.detuneCentsRange = rr(12, 38);
             }
 
             // Safety clamps to prevent ultra-quiet or ultra-hot patches.
@@ -3310,6 +3444,11 @@
             playerInst.outGain = Math.min(1.05, Math.max(0.94, playerInst.outGain));
             playerInst.stereo = Math.min(0.94, Math.max(0.7, playerInst.stereo));
             playerInst.dR = Math.min(0.009, Math.max(0.0032, playerInst.dR));
+            playerInst.indexScale = Math.min(1.85, Math.max(0.08, playerInst.indexScale));
+            playerInst.driveAmt = Math.min(7.2, Math.max(0.85, playerInst.driveAmt));
+            playerInst.peakQ = Math.min(6.2, Math.max(0.45, playerInst.peakQ));
+            playerInst.modRatio = Math.min(11.5, Math.max(0.15, playerInst.modRatio));
+            playerInst.detuneCentsRange = Math.min(62, Math.max(1.5, playerInst.detuneCentsRange));
           }
 
           /** Reduce loop-wrap clicks and DC offset that make playback sound glitchy. */
@@ -4048,8 +4187,10 @@
               mod.type = P.modType;
               carrier.frequency.setValueAtTime(fc, t);
               mod.frequency.setValueAtTime(fc * MOD_RATIO, t);
-              carrier.detune.setValueAtTime((Math.random() - 0.5) * 4.5, t);
-              mod.detune.setValueAtTime((Math.random() - 0.5) * 4.5, t);
+              const dtc =
+                P.detuneCentsRange != null && P.detuneCentsRange >= 0 ? P.detuneCentsRange : 4.5;
+              carrier.detune.setValueAtTime((Math.random() - 0.5) * dtc, t);
+              mod.detune.setValueAtTime((Math.random() - 0.5) * dtc, t);
 
               let indexPeak = Math.min(42, Math.max(6, fc * 0.058)) * P.indexScale;
               indexPeak = Math.min(55, Math.max(4, indexPeak));
@@ -4070,7 +4211,7 @@
               sub = audio.createOscillator();
               sub.type = "sine";
               sub.frequency.setValueAtTime(Math.max(28, fc * 0.5), t);
-              sub.detune.setValueAtTime((Math.random() - 0.5) * 3, t);
+              sub.detune.setValueAtTime((Math.random() - 0.5) * Math.min(18, dtc * 0.75), t);
               subGain = audio.createGain();
               subGain.gain.setValueAtTime(0.0001, t);
               subGain.gain.exponentialRampToValueAtTime(0.14 * P.subScale, t + 0.012);
