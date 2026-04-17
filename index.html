@@ -76,7 +76,7 @@
       background: rgba(40, 45, 55, 0.92);
       border: 1px solid rgba(255,255,255,0.12);
       border-radius: 10px;
-      padding: 10px;
+      padding: 8px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.28);
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
@@ -124,9 +124,24 @@
       line-height: 1;
     }
     #touch-music .tm-grid { display: grid; gap: 8px; }
-    /* Synth row: 1–0 horizontally. */
+    /* Synth row: 1–0 horizontally, touching. */
     #touch-music .tm-grid[data-tm-synth-grid] {
-      grid-template-columns: repeat(11, minmax(0, 1fr));
+      gap: 0;
+      grid-template-columns: repeat(10, minmax(0, 1fr));
+    }
+    #touch-music .tm-grid[data-tm-synth-grid] .tm-btn {
+      min-height: 46px;
+      padding: 6px 0;
+      font-size: 15px;
+      border-radius: 0;
+    }
+    #touch-music .tm-grid[data-tm-synth-grid] .tm-btn:first-child {
+      border-top-left-radius: 10px;
+      border-bottom-left-radius: 10px;
+    }
+    #touch-music .tm-grid[data-tm-synth-grid] .tm-btn:last-child {
+      border-top-right-radius: 10px;
+      border-bottom-right-radius: 10px;
     }
     /* Drums: single horizontal row under synth. */
     #touch-music .tm-grid[data-tm-drums-grid] {
@@ -171,7 +186,7 @@
     #touch-music .tm-btn--rand { background: #1fbf5b; color: #fff; border-color: rgba(0,0,0,0.22); }
     #touch-music .tm-row {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 8px;
     }
     #hud .hud-toggles {
@@ -268,16 +283,17 @@
         <div class="tm-section">
           <div class="tm-label">Drums</div>
           <div class="tm-grid" data-tm-drums-grid>
-            <button type="button" class="tm-btn tm-btn--drum" data-tm-action="drum" data-drum-kind="kick">[</button>
-            <button type="button" class="tm-btn tm-btn--drum" data-tm-action="drum" data-drum-kind="snare">]</button>
-            <button type="button" class="tm-btn tm-btn--drum" data-tm-action="drum" data-drum-kind="hat">;</button>
-            <button type="button" class="tm-btn tm-btn--drum" data-tm-action="drum" data-drum-kind="cym">'</button>
+            <button type="button" class="tm-btn tm-btn--drum" data-tm-action="drum" data-drum-kind="kick">✦</button>
+            <button type="button" class="tm-btn tm-btn--drum" data-tm-action="drum" data-drum-kind="snare">✶</button>
+            <button type="button" class="tm-btn tm-btn--drum" data-tm-action="drum" data-drum-kind="hat">✴</button>
+            <button type="button" class="tm-btn tm-btn--drum" data-tm-action="drum" data-drum-kind="cym">✹</button>
           </div>
         </div>
         <div class="tm-section">
           <div class="tm-row">
             <button type="button" class="tm-btn tm-btn--looper" data-tm-action="looper">Rec</button>
             <button type="button" class="tm-btn tm-btn--overdub" data-tm-action="overdub">Overdub</button>
+            <button type="button" class="tm-btn tm-btn--rand" data-tm-action="rand">-</button>
             <button type="button" class="tm-btn" data-tm-action="clear">Clear</button>
           </div>
         </div>
@@ -4917,24 +4933,18 @@
             });
           }
 
-          // Build synth buttons: 1..0 with Randomize after 0.
+          // Build synth buttons: 1..0 (randomize is in the bottom row).
           const synthGrid = el.querySelector("[data-tm-synth-grid]");
           if (synthGrid && !synthGrid.childElementCount) {
-            const order = ["Digit1","Digit2","Digit3","Digit4","Digit5","Digit6","Digit7","Digit8","Digit9","Digit0","__RAND__"];
+            const order = ["Digit1","Digit2","Digit3","Digit4","Digit5","Digit6","Digit7","Digit8","Digit9","Digit0"];
             for (const code of order) {
               const b = document.createElement("button");
               b.type = "button";
-              if (code === "__RAND__") {
-                b.className = "tm-btn tm-btn--rand";
-                b.textContent = "-";
-                b.setAttribute("data-tm-action", "rand");
-              } else {
-                const label = code === "Digit0" ? "0" : code.slice(5);
-                b.className = "tm-btn tm-btn--synth";
-                b.textContent = label;
-                b.setAttribute("data-tm-action", "synth");
-                b.setAttribute("data-synth-code", code);
-              }
+              const label = code === "Digit0" ? "0" : code.slice(5);
+              b.className = "tm-btn tm-btn--synth";
+              b.textContent = label;
+              b.setAttribute("data-tm-action", "synth");
+              b.setAttribute("data-synth-code", code);
               synthGrid.appendChild(b);
             }
           }
@@ -5066,11 +5076,35 @@
             }
           }
 
+          function onTouchMove(e) {
+            const touches = e.changedTouches;
+            for (let i = 0; i < touches.length; i++) {
+              const t = touches[i];
+              const tid = "t" + t.identifier;
+              const cur = touchHeldBtnById.get(tid);
+              if (!cur) continue;
+              const curAction = cur.getAttribute("data-tm-action");
+              if (curAction !== "synth") continue;
+              // Keep iOS from treating this as a scroll gesture while playing.
+              stopEvent(e);
+              const hit = btnFromTouch(t);
+              if (!hit) continue;
+              const hitAction = hit.getAttribute("data-tm-action");
+              if (hitAction !== "synth") continue;
+              if (hit === cur) continue;
+              // Slide between notes: stop current note, start new note.
+              handleUp(cur, tid);
+              touchHeldBtnById.set(tid, hit);
+              handleDown(hit, tid);
+            }
+          }
+
           el.addEventListener("pointerdown", onPointerDown, { passive: false });
           el.addEventListener("pointerup", onPointerUpOrCancel, { passive: false });
           el.addEventListener("pointercancel", onPointerUpOrCancel, { passive: false });
           el.addEventListener("lostpointercapture", onPointerUpOrCancel, { passive: false });
           el.addEventListener("touchstart", onTouchStart, { passive: false });
+          el.addEventListener("touchmove", onTouchMove, { passive: false });
           el.addEventListener("touchend", onTouchEndOrCancel, { passive: false });
           el.addEventListener("touchcancel", onTouchEndOrCancel, { passive: false });
         }
