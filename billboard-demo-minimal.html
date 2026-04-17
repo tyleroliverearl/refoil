@@ -104,7 +104,11 @@
     #touch-music .tm-grid { display: grid; gap: 8px; }
     /* Synth row: 1–0 horizontally. */
     #touch-music .tm-grid[data-tm-synth-grid] {
-      grid-template-columns: repeat(10, minmax(0, 1fr));
+      grid-template-columns: repeat(11, minmax(0, 1fr));
+    }
+    /* Drums: vertical stack below synth. */
+    #touch-music .tm-grid[data-tm-drums-grid] {
+      grid-template-columns: 1fr;
     }
     #touch-music .tm-section { margin: 8px 0 0; }
     #touch-music .tm-section:first-child { margin-top: 0; }
@@ -145,7 +149,7 @@
     #touch-music .tm-btn--rand { background: #1fbf5b; color: #fff; border-color: rgba(0,0,0,0.22); }
     #touch-music .tm-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 8px;
     }
     #hud .hud-toggles {
@@ -158,7 +162,7 @@
     #hud[data-collapsed="true"] .hud-panel { display: none !important; }
     #looper-record-indicator {
       position: fixed; top: 12px; right: 12px; width: 10px; height: 10px;
-      border-radius: 50%; z-index: 11; pointer-events: none;
+      border-radius: 50%; z-index: 140; pointer-events: none;
       box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.22);
     }
     #looper-record-indicator[data-state="rec"] { background: #e02020; }
@@ -240,14 +244,8 @@
           <div class="tm-grid" data-tm-synth-grid></div>
         </div>
         <div class="tm-section">
-          <div class="tm-row">
-            <button type="button" class="tm-btn tm-btn--rand" data-tm-action="rand">-</button>
-            <button type="button" class="tm-btn tm-btn--overdub" data-tm-action="overdub">+</button>
-          </div>
-        </div>
-        <div class="tm-section">
           <div class="tm-label">Drums</div>
-          <div class="tm-grid">
+          <div class="tm-grid" data-tm-drums-grid>
             <button type="button" class="tm-btn tm-btn--drum" data-tm-action="drum" data-drum-kind="kick">[</button>
             <button type="button" class="tm-btn tm-btn--drum" data-tm-action="drum" data-drum-kind="snare">]</button>
             <button type="button" class="tm-btn tm-btn--drum" data-tm-action="drum" data-drum-kind="hat">;</button>
@@ -257,6 +255,7 @@
         <div class="tm-section">
           <div class="tm-row">
             <button type="button" class="tm-btn tm-btn--looper" data-tm-action="looper">~</button>
+            <button type="button" class="tm-btn tm-btn--overdub" data-tm-action="overdub">+</button>
             <button type="button" class="tm-btn" data-tm-action="clear">Del</button>
           </div>
         </div>
@@ -4839,18 +4838,24 @@
             });
           }
 
-          // Build synth buttons: 1..0
+          // Build synth buttons: 1..0 with Randomize as the 5th key.
           const synthGrid = el.querySelector("[data-tm-synth-grid]");
           if (synthGrid && !synthGrid.childElementCount) {
-            const order = ["Digit1","Digit2","Digit3","Digit4","Digit5","Digit6","Digit7","Digit8","Digit9","Digit0"];
+            const order = ["Digit1","Digit2","Digit3","Digit4","__RAND__","Digit5","Digit6","Digit7","Digit8","Digit9","Digit0"];
             for (const code of order) {
-              const label = code === "Digit0" ? "0" : code.slice(5);
               const b = document.createElement("button");
               b.type = "button";
-              b.className = "tm-btn tm-btn--synth";
-              b.textContent = label;
-              b.setAttribute("data-tm-action", "synth");
-              b.setAttribute("data-synth-code", code);
+              if (code === "__RAND__") {
+                b.className = "tm-btn tm-btn--rand";
+                b.textContent = "-";
+                b.setAttribute("data-tm-action", "rand");
+              } else {
+                const label = code === "Digit0" ? "0" : code.slice(5);
+                b.className = "tm-btn tm-btn--synth";
+                b.textContent = label;
+                b.setAttribute("data-tm-action", "synth");
+                b.setAttribute("data-synth-code", code);
+              }
               synthGrid.appendChild(b);
             }
           }
@@ -4925,22 +4930,36 @@
           }
 
           // Touch-event fallback for iOS/Safari variants where pointer events / audio gestures can be flaky.
+          function btnFromTouch(t) {
+            try {
+              const hit = document.elementFromPoint(t.clientX, t.clientY);
+              if (!hit || !hit.closest) return null;
+              const b = hit.closest("[data-tm-action]");
+              if (!b) return null;
+              if (!el.contains(b)) return null;
+              return b;
+            } catch (e) {
+              return null;
+            }
+          }
           function onTouchStart(e) {
-            const b = btnFromEvent(e);
-            if (!b) return;
             stopEvent(e);
             const touches = e.changedTouches;
             for (let i = 0; i < touches.length; i++) {
-              handleDown(b, "t" + touches[i].identifier);
+              const t = touches[i];
+              const b = btnFromTouch(t);
+              if (!b) continue;
+              handleDown(b, "t" + t.identifier);
             }
           }
           function onTouchEndOrCancel(e) {
-            const b = btnFromEvent(e);
-            if (!b) return;
             stopEvent(e);
             const touches = e.changedTouches;
             for (let i = 0; i < touches.length; i++) {
-              handleUp(b, "t" + touches[i].identifier);
+              const t = touches[i];
+              const b = btnFromTouch(t);
+              if (!b) continue;
+              handleUp(b, "t" + t.identifier);
             }
           }
 
