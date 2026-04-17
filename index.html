@@ -3177,7 +3177,7 @@
             playerInst.stereo = rr(0.82, 0.92);
             playerInst.dR = rr(0.0041, 0.0072);
 
-            if (roll < 0.22) {
+            if (roll < 0.12) {
               // Piano-ish: cleaner carrier, light FM, less drive, faster "pluck" feel via lower sustains.
               playerInst.carrierType = pick(["triangle", "sine"]);
               playerInst.modRatio = rr(1.85, 3.35);
@@ -3195,7 +3195,7 @@
               playerInst.subScale *= rr(0.65, 0.95);
               playerInst.stereo = rr(0.78, 0.88);
               playerInst.outGain = rr(0.96, 1.02);
-            } else if (roll < 0.4) {
+            } else if (roll < 0.22) {
               // Bassoon-ish: reedy fundamental, darker filter, modest resonance, minimal stereo.
               playerInst.carrierType = pick(["square", "triangle"]);
               playerInst.modRatio = rr(0.85, 1.45);
@@ -3211,6 +3211,82 @@
               playerInst.stereo = rr(0.72, 0.84);
               playerInst.outGain = rr(0.96, 1.02);
               playerInst.subScale *= rr(0.85, 1.15);
+            } else if (roll < 0.34) {
+              // Digital bright EP / DX-style tines (GM electric piano family).
+              playerInst.modType = pick(["sine", "triangle"]);
+              playerInst.carrierType = pick(["triangle", "sine"]);
+              playerInst.modRatio = rr(2.6, 5.4);
+              playerInst.indexScale = rr(0.35, 0.82);
+              playerInst.qScale = rr(0.82, 1.12);
+              playerInst.fOpenScale = rr(1.12, 1.42);
+              playerInst.fSusScale = rr(0.72, 0.95);
+              playerInst.driveAmt = rr(1.55, 2.85);
+              playerInst.peakFScale = rr(0.88, 1.28);
+              playerInst.peakQ = rr(1.4, 2.9);
+              playerInst.peakGainAtk = rr(0.12, 0.55);
+              playerInst.peakGainSus = rr(0.06, 0.38);
+              playerInst.ampSus1Scale *= rr(0.62, 0.88);
+              playerInst.ampSus2Scale *= rr(0.38, 0.72);
+              playerInst.subScale *= rr(0.55, 0.88);
+              playerInst.stereo = rr(0.8, 0.9);
+              playerInst.outGain = rr(0.96, 1.02);
+            } else if (roll < 0.46) {
+              // String ensemble pad (slow body, dark filter bloom, wide stereo).
+              playerInst.modType = pick(["sine", "triangle"]);
+              playerInst.carrierType = pick(["sine", "triangle"]);
+              playerInst.modRatio = rr(0.32, 0.92);
+              playerInst.indexScale = rr(0.15, 0.48);
+              playerInst.qScale = rr(0.68, 1.05);
+              playerInst.fOpenScale = rr(0.42, 0.72);
+              playerInst.fSusScale = rr(0.92, 1.18);
+              playerInst.driveAmt = rr(1.25, 2.35);
+              playerInst.peakFScale = rr(0.55, 0.92);
+              playerInst.peakQ = rr(0.75, 1.85);
+              playerInst.peakGainAtk = rr(0.45, 1.85);
+              playerInst.peakGainSus = rr(0.35, 0.95);
+              playerInst.ampSus1Scale *= rr(0.95, 1.12);
+              playerInst.ampSus2Scale *= rr(0.88, 1.1);
+              playerInst.subScale *= rr(0.55, 0.82);
+              playerInst.stereo = rr(0.86, 0.93);
+              playerInst.outGain = rr(0.95, 1.02);
+            } else if (roll < 0.58) {
+              // Synth brass / GM trumpet–adjacent (bright attack, resonant peak).
+              playerInst.modType = pick(["sine", "triangle"]);
+              playerInst.carrierType = pick(["square", "sawtooth"]);
+              playerInst.modRatio = rr(1.05, 2.55);
+              playerInst.indexScale = rr(0.48, 1.12);
+              playerInst.qScale = rr(0.88, 1.22);
+              playerInst.fOpenScale = rr(0.95, 1.38);
+              playerInst.fSusScale = rr(0.72, 1.05);
+              playerInst.driveAmt = rr(2.1, 3.95);
+              playerInst.peakFScale = rr(0.82, 1.32);
+              playerInst.peakQ = rr(2.2, 4.4);
+              playerInst.peakGainAtk = rr(0.08, 0.42);
+              playerInst.peakGainSus = rr(0.18, 0.72);
+              playerInst.ampSus1Scale *= rr(0.75, 0.98);
+              playerInst.ampSus2Scale *= rr(0.55, 0.88);
+              playerInst.subScale *= rr(0.72, 1.05);
+              playerInst.stereo = rr(0.74, 0.86);
+              playerInst.outGain = rr(0.95, 1.02);
+            } else if (roll < 0.7) {
+              // Mallet / vibraphone / digital marimba (metallic FM, short decay).
+              playerInst.modType = pick(["sine", "triangle"]);
+              playerInst.carrierType = pick(["triangle", "sine"]);
+              playerInst.modRatio = rr(3.4, 6.8);
+              playerInst.indexScale = rr(0.42, 0.98);
+              playerInst.qScale = rr(0.78, 1.18);
+              playerInst.fOpenScale = rr(1.08, 1.48);
+              playerInst.fSusScale = rr(0.68, 0.95);
+              playerInst.driveAmt = rr(1.4, 2.65);
+              playerInst.peakFScale = rr(0.92, 1.38);
+              playerInst.peakQ = rr(1.6, 3.4);
+              playerInst.peakGainAtk = rr(0.1, 0.48);
+              playerInst.peakGainSus = rr(0.05, 0.32);
+              playerInst.ampSus1Scale *= rr(0.48, 0.72);
+              playerInst.ampSus2Scale *= rr(0.28, 0.55);
+              playerInst.subScale *= rr(0.5, 0.78);
+              playerInst.stereo = rr(0.82, 0.91);
+              playerInst.outGain = rr(0.96, 1.02);
             } else {
               // Default bass/synth exploration (still volume-safe).
               playerInst.carrierType = pick(["sawtooth", "square", "triangle"]);
