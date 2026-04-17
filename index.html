@@ -211,6 +211,14 @@
       border-radius: 50%; z-index: 140; pointer-events: none;
       box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.22);
     }
+    /* Touch-only placement: indicator lives on the touch music panel. */
+    #touch-music .tm-wrap { position: relative; }
+    #touch-music #looper-record-indicator {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 2;
+    }
     #looper-record-indicator[data-state="rec"] { background: #e02020; }
     #looper-record-indicator[data-state="arm"] { background: #e6c200; }
     #static-help {
@@ -4913,6 +4921,15 @@
           if (!show) return;
           el.hidden = false;
 
+          // Touch-only: move the looper record indicator into the touch music panel.
+          try {
+            const ind = document.getElementById("looper-record-indicator");
+            const wrap = el.querySelector(".tm-wrap");
+            if (ind && wrap && !wrap.contains(ind)) {
+              wrap.appendChild(ind);
+            }
+          } catch (e) {}
+
           const toggleBtn = el.querySelector("[data-tm-toggle]");
           function applyCollapsed(c) {
             el.setAttribute("data-collapsed", c ? "true" : "false");
@@ -4921,9 +4938,10 @@
               localStorage.setItem("touchMusicCollapsed", c ? "1" : "0");
             } catch (e) {}
           }
-          let collapsed = false;
+          let collapsed = true;
           try {
-            collapsed = localStorage.getItem("touchMusicCollapsed") === "1";
+            const stored = localStorage.getItem("touchMusicCollapsed");
+            collapsed = stored == null ? true : stored === "1";
           } catch (e) {}
           applyCollapsed(collapsed);
           if (toggleBtn) {
