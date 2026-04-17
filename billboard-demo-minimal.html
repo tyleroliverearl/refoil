@@ -106,9 +106,9 @@
     #touch-music .tm-grid[data-tm-synth-grid] {
       grid-template-columns: repeat(11, minmax(0, 1fr));
     }
-    /* Drums: vertical stack below synth. */
+    /* Drums: single horizontal row under synth. */
     #touch-music .tm-grid[data-tm-drums-grid] {
-      grid-template-columns: 1fr;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
     #touch-music .tm-section { margin: 8px 0 0; }
     #touch-music .tm-section:first-child { margin-top: 0; }
@@ -4838,10 +4838,10 @@
             });
           }
 
-          // Build synth buttons: 1..0 with Randomize as the 5th key.
+          // Build synth buttons: 1..0 with Randomize after 0.
           const synthGrid = el.querySelector("[data-tm-synth-grid]");
           if (synthGrid && !synthGrid.childElementCount) {
-            const order = ["Digit1","Digit2","Digit3","Digit4","__RAND__","Digit5","Digit6","Digit7","Digit8","Digit9","Digit0"];
+            const order = ["Digit1","Digit2","Digit3","Digit4","Digit5","Digit6","Digit7","Digit8","Digit9","Digit0","__RAND__"];
             for (const code of order) {
               const b = document.createElement("button");
               b.type = "button";
