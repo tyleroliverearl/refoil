@@ -4009,6 +4009,38 @@
             } catch (e) {}
           }
 
+          /** Short cartoon boing via WebAudio (reliable on iOS WebKit; HTMLAudio jump clip often fails there). */
+          function playJumpBoingSynth(baseVolume) {
+            if (engineMuted) return;
+            unlock();
+            const audio = ensure();
+            if (!audio) return;
+            if (audio.state === "suspended") {
+              try {
+                audio.resume();
+              } catch (e) {}
+            }
+            const t0 = audio.currentTime;
+            function busConnect(g) {
+              g.connect(playerDry);
+              g.connect(playerConv);
+            }
+            const v = Math.max(0.02, Math.min(0.95, baseVolume * 0.52));
+            const osc = ctx.createOscillator();
+            osc.type = "sine";
+            const startHz = 395 + Math.random() * 85;
+            osc.frequency.setValueAtTime(startHz, t0);
+            osc.frequency.exponentialRampToValueAtTime(92, t0 + 0.12);
+            const g = ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t0);
+            g.gain.exponentialRampToValueAtTime(v, t0 + 0.006);
+            g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2);
+            osc.connect(g);
+            busConnect(g);
+            osc.start(t0);
+            osc.stop(t0 + 0.22);
+          }
+
           return {
             noteOn,
             noteOff,
@@ -4019,7 +4051,8 @@
             unlock,
             triggerDrum,
             toggleOverdub,
-            randomizePlayerInstrument
+            randomizePlayerInstrument,
+            playJumpBoingSynth
           };
         })();
 
@@ -5378,7 +5411,26 @@
           if (FmBellSynth.isEngineMuted()) return;
           if (!boingsEnabled) return;
           try {
+            FmBellSynth.unlock();
+          } catch (e) {}
+          let touchUi = false;
+          try {
+            touchUi =
+              window.matchMedia("(pointer: coarse)").matches ||
+              navigator.maxTouchPoints > 0;
+          } catch (e) {
+            touchUi = navigator.maxTouchPoints > 0;
+          }
+          if (touchUi) {
+            try {
+              FmBellSynth.playJumpBoingSynth(baseVolume);
+              return;
+            } catch (e) {}
+          }
+          try {
             const a = new Audio(JUMP_BOING_SRC);
+            a.setAttribute("playsinline", "");
+            a.playsInline = true;
             jumpBoingAudios.push(a);
             const done = function () {
               const ix = jumpBoingAudios.indexOf(a);
@@ -5388,8 +5440,19 @@
             a.addEventListener("error", done);
             a.volume = baseVolume * JUMP_BOING_QUIETER;
             a.playbackRate = 0.48 + Math.random() * Math.random() * 0.95 + Math.random() * 0.35;
-            void a.play();
-          } catch (e) {}
+            const p = a.play();
+            if (p && typeof p.catch === "function") {
+              p.catch(function () {
+                try {
+                  FmBellSynth.playJumpBoingSynth(baseVolume);
+                } catch (e2) {}
+              });
+            }
+          } catch (e) {
+            try {
+              FmBellSynth.playJumpBoingSynth(baseVolume);
+            } catch (e2) {}
+          }
         }
 
         let verticalVelocity = 0;
