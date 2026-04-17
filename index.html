@@ -108,8 +108,13 @@
       max-width: none;
     }
     #touch-music[data-collapsed="true"] .tm-wrap {
-      padding: 6px;
+      padding: 0;
       border-radius: 10px;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
     }
     #touch-music[data-collapsed="true"] .tm-head {
       margin: 0;
@@ -216,6 +221,7 @@
       border-radius: 50%; z-index: 140; pointer-events: none;
       box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.22);
     }
+    #looper-record-indicator[hidden] { display: none !important; }
     /* Touch-only placement: indicator lives on the touch music panel. */
     #touch-music .tm-wrap { position: relative; }
     #touch-music #looper-record-indicator {
@@ -224,6 +230,7 @@
       right: 8px;
       z-index: 2;
     }
+    #touch-music[data-collapsed="true"] #looper-record-indicator { display: none !important; }
     #looper-record-indicator[data-state="rec"] { background: #e02020; }
     #looper-record-indicator[data-state="arm"] { background: #e6c200; }
     #static-help {
