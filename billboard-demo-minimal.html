@@ -4865,10 +4865,18 @@
             try {
               FmBellSynth.unlock();
             } catch (e) {}
+            // Some Chromium mobile builds need a second tick to fully flip the context to "running".
+            try {
+              setTimeout(() => {
+                try { FmBellSynth.unlock(); } catch (e) {}
+              }, 0);
+            } catch (e) {}
           }
           // Capture-phase so UI taps (HUD/buttons) also count as a gesture.
-          addEventListener("pointerdown", tryUnlock, { capture: true, passive: true });
-          addEventListener("touchstart", tryUnlock, { capture: true, passive: true });
+          addEventListener("pointerdown", tryUnlock, { capture: true, passive: false });
+          addEventListener("pointerup", tryUnlock, { capture: true, passive: false });
+          addEventListener("touchstart", tryUnlock, { capture: true, passive: false });
+          addEventListener("touchend", tryUnlock, { capture: true, passive: false });
           addEventListener("keydown", tryUnlock, { capture: true, passive: true });
         })();
 
