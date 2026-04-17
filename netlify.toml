@@ -1,0 +1,16 @@
+# Deploy this entire folder as the site root (drag-and-drop or Git).
+# Netlify serves index.html at /. Relative asset paths (spiral.png, etc.) require this.
+
+[build]
+  publish = "."
+
+# Optional: long cache for images (filenames are versioned by content when you replace files)
+[[headers]]
+  for = "*.png"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
+
+[[headers]]
+  for = "index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
