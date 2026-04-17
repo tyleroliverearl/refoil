@@ -3195,9 +3195,13 @@
 
           function ensure() {
             if (!ctx) {
-              ctx = new (window.AudioContext || window.webkitAudioContext)({
-                latencyHint: "interactive"
-              });
+              const AC = window.AudioContext || window.webkitAudioContext;
+              try {
+                ctx = new AC({ latencyHint: "interactive" });
+              } catch (e) {
+                // Older / stricter Chromium mobile builds can reject the options object.
+                ctx = new AC();
+              }
               playerMaster = ctx.createGain();
               playerMaster.gain.value = 0.104;
               npcMaster = ctx.createGain();
