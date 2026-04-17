@@ -5010,11 +5010,15 @@
               const tid = "t" + t.identifier;
               touchHeldBtnById.set(tid, b);
               const action = b.getAttribute("data-tm-action");
-              // Sustain synth on hold; everything else triggers on release for reliability.
               if (action === "synth") {
+                // Sustain synth on hold.
+                handleDown(b, tid);
+              } else if (action === "drum") {
+                // Drums: trigger on touch start only.
                 handleDown(b, tid);
               } else {
-                b.setAttribute("data-pressed", "true");
+                // Tap actions: trigger on touch start.
+                handleDown(b, tid);
               }
             }
           }
@@ -5031,9 +5035,8 @@
               if (action === "synth") {
                 handleUp(b, tid);
               } else {
-                // Fire tap actions on release.
-                handleDown(b, tid);
-                // Clear pressed state.
+                // Non-synth actions already fired on touchstart; just clear visual state.
+                activeDrumPointer.delete(tid);
                 b.removeAttribute("data-pressed");
               }
             }
