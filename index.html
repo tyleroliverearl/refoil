@@ -3345,6 +3345,17 @@
                 if (outR !== outL) outR.fill(0);
               };
               npcMaster.connect(ctx.destination);
+              try {
+                ctx.addEventListener(
+                  "statechange",
+                  function () {
+                    try {
+                      if (ctx && ctx.state === "running") updateRecordingAudioRoute();
+                    } catch (e) {}
+                  },
+                  false
+                );
+              } catch (e) {}
               updateRecordingAudioRoute();
             }
             return ctx;
@@ -3542,45 +3553,21 @@
             return drumNoiseBuffer;
           }
 
-          /** Schedule WebAudio only after the context is running (avoids pile-ups when resume() is async). */
-          function withAudioRunning(cont) {
+          /** Run audio work in the same call stack as the user gesture (mobile Chrome needs sync resume). */
+          function syncAudioFirst(cont) {
             if (engineMuted) return;
             ensure();
             if (!ctx) return;
-            if (ctx.state === "running") {
-              cont();
-              return;
-            }
             unlock();
             try {
               void ctx.resume();
             } catch (e) {}
-            if (ctx.state === "running") {
-              cont();
-              return;
-            }
-            const pr = ctx.resume();
-            const run = function () {
-              if (engineMuted || !ctx) return;
-              if (ctx.state === "running") {
-                cont();
-                return;
-              }
-              requestAnimationFrame(function () {
-                if (engineMuted || !ctx) return;
-                if (ctx.state === "running") cont();
-              });
-            };
-            if (pr && typeof pr.then === "function") {
-              pr.then(run).catch(run);
-            } else {
-              setTimeout(run, 0);
-            }
+            cont();
           }
 
           function triggerDrum(kind) {
             if (engineMuted) return;
-            withAudioRunning(function () {
+            syncAudioFirst(function () {
               triggerDrumImpl(kind);
             });
           }
@@ -3767,7 +3754,7 @@
 
           function noteOn(voiceId, fc, bassKeyCode) {
             if (engineMuted) return;
-            withAudioRunning(function () {
+            syncAudioFirst(function () {
               noteOnImpl(voiceId, fc, bassKeyCode);
             });
           }
@@ -4987,18 +4974,16 @@
         const bassActiveByKey = new Map();
 
         // --- Mobile/WebAudio unlock + touch music buttons ---
-        (function installGlobalAudioUnlockOnce() {
-          let unlocked = false;
+        (function installGlobalAudioUnlock() {
           function tryUnlock() {
-            if (unlocked) return;
-            unlocked = true;
             try {
               FmBellSynth.unlock();
             } catch (e) {}
-            // Some Chromium mobile builds need a second tick to fully flip the context to "running".
             try {
-              setTimeout(() => {
-                try { FmBellSynth.unlock(); } catch (e) {}
+              setTimeout(function () {
+                try {
+                  FmBellSynth.unlock();
+                } catch (e) {}
               }, 0);
             } catch (e) {}
           }
