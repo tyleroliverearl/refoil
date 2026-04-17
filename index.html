@@ -101,6 +101,28 @@
       font: inherit;
     }
     #touch-music[data-collapsed="true"] .tm-body { display: none; }
+    #touch-music[data-collapsed="true"] {
+      right: auto;
+      width: auto;
+      max-width: none;
+    }
+    #touch-music[data-collapsed="true"] .tm-wrap {
+      padding: 6px;
+      border-radius: 10px;
+    }
+    #touch-music[data-collapsed="true"] .tm-head {
+      margin: 0;
+      justify-content: flex-start;
+    }
+    #touch-music[data-collapsed="true"] .tm-head > span { display: none; }
+    #touch-music[data-collapsed="true"] .tm-toggle {
+      width: 38px;
+      height: 34px;
+      padding: 0;
+      border-radius: 10px;
+      font-size: 16px;
+      line-height: 1;
+    }
     #touch-music .tm-grid { display: grid; gap: 8px; }
     /* Synth row: 1–0 horizontally. */
     #touch-music .tm-grid[data-tm-synth-grid] {
@@ -4878,6 +4900,7 @@
           const toggleBtn = el.querySelector("[data-tm-toggle]");
           function applyCollapsed(c) {
             el.setAttribute("data-collapsed", c ? "true" : "false");
+            if (toggleBtn) toggleBtn.textContent = c ? "♪" : "x";
             try {
               localStorage.setItem("touchMusicCollapsed", c ? "1" : "0");
             } catch (e) {}
