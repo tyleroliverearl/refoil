@@ -236,7 +236,7 @@
     <div class="tm-wrap" role="group" aria-label="Touch music controls">
       <div class="tm-head">
         <span>Music</span>
-        <button type="button" class="tm-toggle" data-tm-toggle>Hide</button>
+        <button type="button" class="tm-toggle" data-tm-toggle aria-label="Toggle music controls">x</button>
       </div>
       <div class="tm-body">
         <div class="tm-section">
@@ -4878,7 +4878,6 @@
           const toggleBtn = el.querySelector("[data-tm-toggle]");
           function applyCollapsed(c) {
             el.setAttribute("data-collapsed", c ? "true" : "false");
-            if (toggleBtn) toggleBtn.textContent = c ? "Show" : "Hide";
             try {
               localStorage.setItem("touchMusicCollapsed", c ? "1" : "0");
             } catch (e) {}
@@ -5001,12 +5000,12 @@
           }
           const touchHeldBtnById = new Map(); // "t<identifier>" -> button element
           function onTouchStart(e) {
-            stopEvent(e);
             const touches = e.changedTouches;
             for (let i = 0; i < touches.length; i++) {
               const t = touches[i];
               const b = btnFromTouch(t);
               if (!b) continue;
+              stopEvent(e);
               const tid = "t" + t.identifier;
               touchHeldBtnById.set(tid, b);
               const action = b.getAttribute("data-tm-action");
@@ -5023,13 +5022,13 @@
             }
           }
           function onTouchEndOrCancel(e) {
-            stopEvent(e);
             const touches = e.changedTouches;
             for (let i = 0; i < touches.length; i++) {
               const t = touches[i];
               const tid = "t" + t.identifier;
               const b = touchHeldBtnById.get(tid) || btnFromTouch(t);
               if (!b) continue;
+              stopEvent(e);
               touchHeldBtnById.delete(tid);
               const action = b.getAttribute("data-tm-action");
               if (action === "synth") {
