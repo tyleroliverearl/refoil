@@ -1283,8 +1283,9 @@
             depthTest: true,
             depthWrite: false,
             polygonOffset: true,
-            polygonOffsetFactor: -1,
-            polygonOffsetUnits: -2
+            // Push *back* slightly to avoid z-fight without drawing over nearer objects/characters.
+            polygonOffsetFactor: 1,
+            polygonOffsetUnits: 1
           });
         }
         function pyramidCartoonColor(hex) {
