@@ -6519,9 +6519,6 @@
           updatePropPhysics("ball", dt);
           resolveBallCubeCollision();
           updatePondTint(dt);
-          // Explicit clear (we do post passes later; don't rely on autoClear).
-          renderer.setRenderTarget(null);
-          renderer.clear(true, true, true);
           // Ensure stencil starts clean each frame.
           renderer.clearStencil();
           renderer.render(scene, camera);
