@@ -4,6 +4,19 @@
 [build]
   publish = "."
 
+# Default site: green tile continent (world-tiles.html). Classic checkerboard: /checkerboard.html
+[[redirects]]
+  from = "/"
+  to = "/world-tiles.html"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/index.html"
+  to = "/world-tiles.html"
+  status = 200
+  force = true
+
 # Optional: long cache for images (filenames are versioned by content when you replace files)
 [[headers]]
   for = "*.png"
