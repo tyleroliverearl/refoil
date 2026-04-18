@@ -4774,279 +4774,231 @@
           }
         }
 
-        // --- Board dragon (procedural mesh + quadruped trot wander) ---
-        const BOARD_DRAGON_EDGE = 8;
-        const BOARD_DRAGON_RUN_SPEED = 10.5;
-        const BOARD_DRAGON_TARGET_EPS = 2.8;
-        const BOARD_DRAGON_BODY_Y = 0.02;
-        const _dragonScratch = {
-          v: new THREE.Vector3(),
-          toTarget: new THREE.Vector3(),
-          forward: new THREE.Vector3()
+        // --- Board waddle-bot (silly cartoony robot, procedural mesh + wander) ---
+        const BOARD_WADDLE_EDGE = 8;
+        const BOARD_WADDLE_RUN_SPEED = 8.2;
+        const BOARD_WADDLE_TARGET_EPS = 2.8;
+        const BOARD_WADDLE_BODY_Y = 0.02;
+        const _waddleScratch = {
+          toTarget: new THREE.Vector3()
         };
-        let boardDragon = null;
+        let boardWaddleBot = null;
 
-        function createBoardDragonMaterials() {
-          const scale = new THREE.MeshStandardMaterial({
-            color: 0x1f6b52,
-            roughness: 0.62,
-            metalness: 0.06,
+        function createWaddleBotMaterials() {
+          const paint = new THREE.MeshStandardMaterial({
+            color: 0xb8e4ff,
+            roughness: 0.55,
+            metalness: 0.12,
+            flatShading: true,
+            envMapIntensity: 0.42
+          });
+          const paintDark = new THREE.MeshStandardMaterial({
+            color: 0x6ba8d4,
+            roughness: 0.58,
+            metalness: 0.18,
+            flatShading: true,
+            envMapIntensity: 0.38
+          });
+          const accent = new THREE.MeshStandardMaterial({
+            color: 0xffd54a,
+            roughness: 0.72,
+            metalness: 0.05,
             flatShading: true,
             envMapIntensity: 0.35
           });
-          const scaleDark = new THREE.MeshStandardMaterial({
-            color: 0x123d30,
-            roughness: 0.7,
-            metalness: 0.04,
+          const boot = new THREE.MeshStandardMaterial({
+            color: 0xff6b8a,
+            roughness: 0.68,
+            metalness: 0.08,
             flatShading: true,
-            envMapIntensity: 0.28
+            envMapIntensity: 0.32
           });
-          const belly = new THREE.MeshStandardMaterial({
-            color: 0xd8c9ae,
-            roughness: 0.88,
-            metalness: 0,
-            flatShading: true,
-            envMapIntensity: 0.22
-          });
-          const horn = new THREE.MeshStandardMaterial({
-            color: 0x1c1c1c,
-            roughness: 0.45,
-            metalness: 0.4,
+          const joint = new THREE.MeshStandardMaterial({
+            color: 0x8899aa,
+            roughness: 0.5,
+            metalness: 0.35,
             flatShading: true,
             envMapIntensity: 0.45
           });
-          const membrane = new THREE.MeshStandardMaterial({
-            color: 0x4a1538,
-            roughness: 0.78,
-            metalness: 0.05,
-            emissive: 0x1a060f,
-            emissiveIntensity: 0.22,
-            transparent: true,
-            opacity: 0.86,
-            side: THREE.DoubleSide,
-            flatShading: true
-          });
-          const eye = new THREE.MeshStandardMaterial({
-            color: 0xff6a1a,
+          const eyeWhite = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
             roughness: 0.35,
-            metalness: 0.15,
-            emissive: 0xff3a00,
-            emissiveIntensity: 0.75,
+            metalness: 0.05,
             flatShading: true
           });
-          return { scale, scaleDark, belly, horn, membrane, eye };
+          const eyeDot = new THREE.MeshStandardMaterial({
+            color: 0x111111,
+            roughness: 0.9,
+            metalness: 0,
+            flatShading: true
+          });
+          const led = new THREE.MeshStandardMaterial({
+            color: 0x44ffcc,
+            roughness: 0.4,
+            metalness: 0.2,
+            emissive: 0x22ddaa,
+            emissiveIntensity: 0.55,
+            flatShading: true
+          });
+          return { paint, paintDark, accent, boot, joint, eyeWhite, eyeDot, led };
         }
 
-        function createBoardDragonLeg(mats, hipX, hipZ, mirrorX) {
+        function createWaddleBotLeg(mats, sideX) {
           const hip = new THREE.Group();
-          hip.position.set(hipX, 0.56, hipZ);
-          const upperLen = 0.36;
-          const lowerLen = 0.34;
-          const upper = new THREE.Mesh(
-            new THREE.CapsuleGeometry(0.072, upperLen * 0.72, 5, 10),
-            mats.scaleDark
+          hip.position.set(sideX * 0.24, -0.02, 0.02);
+          const thigh = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.11, 0.12, 0.24, 6),
+            mats.paintDark
           );
-          upper.rotation.z = mirrorX * 0.08;
-          upper.position.set(mirrorX * 0.02, -upperLen * 0.42, 0.05);
+          thigh.rotation.z = sideX * 0.06;
+          thigh.position.set(0, -0.12, 0);
           const knee = new THREE.Group();
-          knee.position.set(0, -upperLen * 0.78, 0.04);
-          const lower = new THREE.Mesh(
-            new THREE.CapsuleGeometry(0.056, lowerLen * 0.68, 5, 10),
-            mats.scale
+          knee.position.set(0, -0.24, 0);
+          const shin = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.085, 0.095, 0.2, 6),
+            mats.paint
           );
-          lower.position.set(0, -lowerLen * 0.4, 0);
+          shin.position.set(0, -0.1, 0);
           const foot = new THREE.Mesh(
-            new THREE.BoxGeometry(0.11, 0.055, 0.17),
-            mats.horn
+            new THREE.BoxGeometry(0.26, 0.07, 0.36),
+            mats.boot
           );
-          foot.position.set(0, -lowerLen * 0.78, 0.06);
-          hip.add(upper);
-          upper.add(knee);
-          knee.add(lower);
+          foot.position.set(sideX * 0.05, -0.2, 0.08);
+          hip.add(thigh);
+          thigh.add(knee);
+          knee.add(shin);
           knee.add(foot);
-          return { hip, knee, upper, lower };
+          return { hip, knee, thigh, shin, foot };
         }
 
-        function createBoardDragon() {
-          const mats = createBoardDragonMaterials();
+        function createWaddleBot() {
+          const mats = createWaddleBotMaterials();
           const root = new THREE.Group();
-          root.name = "BoardDragon";
+          root.name = "WaddleBot";
           const bob = new THREE.Group();
-          bob.name = "DragonBob";
+          bob.name = "WaddleBob";
           const torso = new THREE.Group();
-          torso.name = "DragonTorso";
-          torso.position.set(0, 0.74, 0);
+          torso.name = "WaddleTorso";
+          torso.position.set(0, 0.56, 0);
           bob.add(torso);
           root.add(bob);
 
-          const bodyGeom = new THREE.SphereGeometry(0.5, 12, 10);
-          const body = new THREE.Mesh(bodyGeom, mats.scale);
-          body.scale.set(1.05, 0.74, 1.35);
-          body.position.set(0, 0, -0.04);
-          body.castShadow = true;
-          torso.add(body);
-
-          const chest = new THREE.Mesh(
-            new THREE.BoxGeometry(0.62, 0.22, 0.58),
-            mats.belly
+          const belly = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.38, 0.42, 0.52, 10),
+            mats.paint
           );
-          chest.position.set(0, -0.18, 0.22);
-          chest.castShadow = true;
-          torso.add(chest);
+          belly.rotation.x = Math.PI / 2;
+          belly.position.set(0, 0, 0);
+          belly.scale.set(1, 1.05, 1);
+          belly.castShadow = true;
+          torso.add(belly);
 
-          const ridge = new THREE.Mesh(
-            new THREE.BoxGeometry(0.12, 0.14, 1.05),
-            mats.scaleDark
+          const chestPlate = new THREE.Mesh(
+            new THREE.BoxGeometry(0.52, 0.28, 0.38),
+            mats.accent
           );
-          ridge.position.set(0, 0.38, -0.12);
-          torso.add(ridge);
+          chestPlate.position.set(0, 0.08, 0.22);
+          chestPlate.castShadow = true;
+          torso.add(chestPlate);
 
-          const tailBase = new THREE.Group();
-          tailBase.position.set(0, 0.28, -0.62);
-          torso.add(tailBase);
-          const tailSegs = [];
-          let tailParent = tailBase;
-          const tailLens = [0.42, 0.38, 0.32, 0.26];
-          for (let ti = 0; ti < tailLens.length; ti++) {
-            const segG = new THREE.Group();
-            segG.position.set(0, 0.02, ti === 0 ? -0.18 : -tailLens[ti - 1] * 0.82);
-            const tm = new THREE.Mesh(
-              new THREE.CylinderGeometry(0.14 - ti * 0.022, 0.12 - ti * 0.02, tailLens[ti], 8),
-              ti % 2 === 0 ? mats.scale : mats.scaleDark
-            );
-            tm.rotation.x = Math.PI / 2;
-            tm.position.set(0, 0, -tailLens[ti] * 0.45);
-            tm.castShadow = true;
-            segG.add(tm);
-            tailParent.add(segG);
-            tailSegs.push(segG);
-            tailParent = segG;
-          }
-
-          const wingL = new THREE.Group();
-          wingL.position.set(0.48, 0.32, -0.18);
-          const wingR = new THREE.Group();
-          wingR.position.set(-0.48, 0.32, -0.18);
-          const wingGeom = new THREE.ShapeGeometry(
-            (function () {
-              const s = new THREE.Shape();
-              s.moveTo(0, 0);
-              s.quadraticCurveTo(0.55, 0.15, 0.95, 0.92);
-              s.quadraticCurveTo(0.35, 0.55, 0, 0.15);
-              return s;
-            })(),
-            10
+          const ledMesh = new THREE.Mesh(
+            new THREE.CircleGeometry(0.055, 12),
+            mats.led
           );
-          const wMeshL = new THREE.Mesh(wingGeom, mats.membrane);
-          wMeshL.scale.set(1.05, 1.15, 1);
-          wMeshL.rotation.y = Math.PI * 0.5;
-          wMeshL.rotation.x = -0.35;
-          wMeshL.position.set(0.1, 0, 0);
-          const wBoneL = new THREE.Mesh(
-            new THREE.BoxGeometry(0.08, 0.06, 0.72),
-            mats.horn
-          );
-          wBoneL.position.set(0.04, 0, 0.32);
-          wingL.add(wBoneL);
-          wingL.add(wMeshL);
-          const wMeshR = new THREE.Mesh(wingGeom, mats.membrane);
-          wMeshR.scale.set(-1.05, 1.15, 1);
-          wMeshR.rotation.y = -Math.PI * 0.5;
-          wMeshR.rotation.x = -0.35;
-          wMeshR.position.set(-0.1, 0, 0);
-          const wBoneR = new THREE.Mesh(
-            new THREE.BoxGeometry(0.08, 0.06, 0.72),
-            mats.horn
-          );
-          wBoneR.position.set(-0.04, 0, 0.32);
-          wingR.add(wBoneR);
-          wingR.add(wMeshR);
-          torso.add(wingL);
-          torso.add(wingR);
-
-          const neck0 = new THREE.Group();
-          neck0.position.set(0, 0.42, 0.52);
-          torso.add(neck0);
-          const neck1 = new THREE.Group();
-          neck1.position.set(0, 0.1, 0.28);
-          neck0.add(neck1);
-          const neck2 = new THREE.Group();
-          neck2.position.set(0, 0.06, 0.24);
-          neck1.add(neck2);
-          const neckMeshes = [
-            new THREE.Mesh(
-              new THREE.CylinderGeometry(0.2, 0.22, 0.26, 8),
-              mats.scaleDark
-            ),
-            new THREE.Mesh(
-              new THREE.CylinderGeometry(0.18, 0.2, 0.22, 8),
-              mats.scale
-            ),
-            new THREE.Mesh(
-              new THREE.CylinderGeometry(0.15, 0.17, 0.2, 8),
-              mats.scaleDark
-            )
-          ];
-          neckMeshes[0].rotation.x = Math.PI / 2;
-          neckMeshes[0].position.set(0, 0, 0.12);
-          neckMeshes[1].rotation.x = Math.PI / 2;
-          neckMeshes[1].position.set(0, 0, 0.1);
-          neckMeshes[2].rotation.x = Math.PI / 2;
-          neckMeshes[2].position.set(0, 0, 0.09);
-          neck0.add(neckMeshes[0]);
-          neck1.add(neckMeshes[1]);
-          neck2.add(neckMeshes[2]);
+          ledMesh.rotation.x = -Math.PI / 2;
+          ledMesh.position.set(0, 0.09, 0.41);
+          torso.add(ledMesh);
 
           const head = new THREE.Group();
-          head.position.set(0, 0.02, 0.22);
-          neck2.add(head);
-          const skull = new THREE.Mesh(
-            new THREE.BoxGeometry(0.26, 0.2, 0.34),
-            mats.scale
+          head.position.set(0, 0.38, 0);
+          torso.add(head);
+          const dome = new THREE.Mesh(
+            new THREE.SphereGeometry(0.26, 10, 8),
+            mats.paintDark
           );
-          skull.position.set(0, 0.04, 0.08);
-          skull.castShadow = true;
-          head.add(skull);
-          const snout = new THREE.Mesh(
-            new THREE.ConeGeometry(0.11, 0.38, 8),
-            mats.scaleDark
+          dome.scale.set(1.05, 0.72, 1);
+          dome.position.set(0, 0.06, 0);
+          dome.castShadow = true;
+          head.add(dome);
+
+          const visor = new THREE.Mesh(
+            new THREE.BoxGeometry(0.42, 0.12, 0.22),
+            mats.joint
           );
-          snout.rotation.x = Math.PI / 2;
-          snout.position.set(0, 0, 0.38);
-          head.add(snout);
-          const hornL = new THREE.Mesh(
-            new THREE.ConeGeometry(0.055, 0.28, 6),
-            mats.horn
+          visor.position.set(0, 0.08, 0.2);
+          head.add(visor);
+
+          const eyeL = new THREE.Group();
+          eyeL.position.set(0.12, 0.1, 0.24);
+          const eyeWhiteL = new THREE.Mesh(
+            new THREE.SphereGeometry(0.1, 8, 8),
+            mats.eyeWhite
           );
-          hornL.position.set(0.1, 0.22, -0.02);
-          hornL.rotation.z = -0.35;
-          hornL.rotation.x = -0.2;
-          const hornR = hornL.clone();
-          hornR.position.x = -0.1;
-          hornR.rotation.z = 0.35;
-          head.add(hornL);
-          head.add(hornR);
-          const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), mats.eye);
-          eyeL.position.set(0.11, 0.08, 0.18);
-          const eyeR = eyeL.clone();
-          eyeR.position.x = -0.11;
+          const pupilL = new THREE.Mesh(
+            new THREE.SphereGeometry(0.045, 6, 6),
+            mats.eyeDot
+          );
+          pupilL.position.set(0.03, 0, 0.06);
+          eyeL.add(eyeWhiteL);
+          eyeL.add(pupilL);
+          const eyeR = new THREE.Group();
+          eyeR.position.set(-0.12, 0.1, 0.24);
+          const eyeWhiteR = new THREE.Mesh(
+            new THREE.SphereGeometry(0.1, 8, 8),
+            mats.eyeWhite
+          );
+          const pupilR = new THREE.Mesh(
+            new THREE.SphereGeometry(0.045, 6, 6),
+            mats.eyeDot
+          );
+          pupilR.position.set(-0.03, 0, 0.06);
+          eyeR.add(eyeWhiteR);
+          eyeR.add(pupilR);
           head.add(eyeL);
           head.add(eyeR);
-          const nostril = new THREE.Mesh(
-            new THREE.SphereGeometry(0.028, 6, 6),
-            mats.scaleDark
-          );
-          nostril.position.set(0, -0.04, 0.52);
-          head.add(nostril);
 
-          const legFL = createBoardDragonLeg(mats, 0.32, 0.34, 1);
-          const legFR = createBoardDragonLeg(mats, -0.32, 0.34, -1);
-          const legBL = createBoardDragonLeg(mats, 0.32, -0.38, 1);
-          const legBR = createBoardDragonLeg(mats, -0.32, -0.38, -1);
-          torso.add(legFL.hip);
-          torso.add(legFR.hip);
-          torso.add(legBL.hip);
-          torso.add(legBR.hip);
+          const antenna = new THREE.Group();
+          antenna.position.set(0.14, 0.32, -0.02);
+          head.add(antenna);
+          const antStem = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.018, 0.022, 0.28, 6),
+            mats.joint
+          );
+          antStem.position.set(0, 0.16, 0);
+          const antBall = new THREE.Mesh(
+            new THREE.SphereGeometry(0.07, 8, 8),
+            mats.accent
+          );
+          antBall.position.set(0, 0.32, 0);
+          antenna.add(antStem);
+          antenna.add(antBall);
+
+          const armL = new THREE.Group();
+          armL.position.set(0.34, 0.12, 0);
+          const armR = new THREE.Group();
+          armR.position.set(-0.34, 0.12, 0);
+          const upperArmGeom = new THREE.BoxGeometry(0.14, 0.12, 0.28);
+          const foreArmGeom = new THREE.BoxGeometry(0.12, 0.1, 0.26);
+          const uaL = new THREE.Mesh(upperArmGeom, mats.paintDark);
+          uaL.position.set(0.08, -0.02, 0);
+          const faL = new THREE.Mesh(foreArmGeom, mats.paint);
+          faL.position.set(0.26, -0.12, 0.04);
+          armL.add(uaL);
+          armL.add(faL);
+          const uaR = new THREE.Mesh(upperArmGeom, mats.paintDark);
+          uaR.position.set(-0.08, -0.02, 0);
+          uaR.scale.x = -1;
+          const faR = new THREE.Mesh(foreArmGeom, mats.paint);
+          faR.position.set(-0.26, -0.12, 0.04);
+          armR.add(uaR);
+          armR.add(faR);
+          torso.add(armL);
+          torso.add(armR);
+
+          const legL = createWaddleBotLeg(mats, 1);
+          const legR = createWaddleBotLeg(mats, -1);
+          torso.add(legL.hip);
+          torso.add(legR.hip);
 
           root.traverse(function (o) {
             if (o.isMesh) {
@@ -5060,27 +5012,22 @@
             root,
             bob,
             torso,
-            tailSegs,
-            neck0,
-            neck1,
-            neck2,
             head,
-            wingL,
-            wingR,
-            legFL,
-            legFR,
-            legBL,
-            legBR,
+            antenna,
+            armL,
+            armR,
+            legL,
+            legR,
+            pupilL,
+            pupilR,
             walkPhase: Math.random() * Math.PI * 2,
             targetX: 0,
-            targetZ: 0,
-            vy: 0,
-            grounded: true
+            targetZ: 0
           };
         }
 
-        function boardDragonPickTarget(dr) {
-          const margin = halfBoard - BOARD_DRAGON_EDGE;
+        function waddleBotPickTarget(dr) {
+          const margin = halfBoard - BOARD_WADDLE_EDGE;
           for (let attempt = 0; attempt < 24; attempt++) {
             const tx = (Math.random() * 2 - 1) * margin;
             const tz = (Math.random() * 2 - 1) * margin;
@@ -5102,53 +5049,53 @@
             dr.targetZ = tz;
             return;
           }
-          dr.targetX = (Math.random() * 2 - 1) * (halfBoard - BOARD_DRAGON_EDGE);
-          dr.targetZ = (Math.random() * 2 - 1) * (halfBoard - BOARD_DRAGON_EDGE);
+          dr.targetX = (Math.random() * 2 - 1) * (halfBoard - BOARD_WADDLE_EDGE);
+          dr.targetZ = (Math.random() * 2 - 1) * (halfBoard - BOARD_WADDLE_EDGE);
         }
 
-        function spawnBoardDragon() {
-          if (boardDragon) {
-            scene.remove(boardDragon.root);
-            boardDragon = null;
+        function spawnBoardWaddleBot() {
+          if (boardWaddleBot) {
+            scene.remove(boardWaddleBot.root);
+            boardWaddleBot = null;
           }
-          const dr = createBoardDragon();
+          const dr = createWaddleBot();
           const ang = Math.random() * Math.PI * 2;
           const rr = 22 + Math.random() * 24;
           let sx = Math.cos(ang) * rr;
           let sz = Math.sin(ang) * rr;
-          sx = THREE.MathUtils.clamp(sx, -halfBoard + BOARD_DRAGON_EDGE, halfBoard - BOARD_DRAGON_EDGE);
-          sz = THREE.MathUtils.clamp(sz, -halfBoard + BOARD_DRAGON_EDGE, halfBoard - BOARD_DRAGON_EDGE);
-          dr.root.position.set(sx, BOARD_DRAGON_BODY_Y, sz);
+          sx = THREE.MathUtils.clamp(sx, -halfBoard + BOARD_WADDLE_EDGE, halfBoard - BOARD_WADDLE_EDGE);
+          sz = THREE.MathUtils.clamp(sz, -halfBoard + BOARD_WADDLE_EDGE, halfBoard - BOARD_WADDLE_EDGE);
+          dr.root.position.set(sx, BOARD_WADDLE_BODY_Y, sz);
           let gy = sampleSurfaceY(sx, sz);
           if (gy == null) gy = 0;
-          dr.root.position.y = gy + BOARD_DRAGON_BODY_Y;
-          boardDragonPickTarget(dr);
+          dr.root.position.y = gy + BOARD_WADDLE_BODY_Y;
+          waddleBotPickTarget(dr);
           scene.add(dr.root);
-          boardDragon = dr;
+          boardWaddleBot = dr;
         }
 
-        function updateBoardDragon(dt) {
-          if (!boardDragon) return;
-          const dr = boardDragon;
+        function updateBoardWaddleBot(dt) {
+          if (!boardWaddleBot) return;
+          const dr = boardWaddleBot;
           const g = dr.root;
-          const margin = halfBoard - BOARD_DRAGON_EDGE - 1;
-          _dragonScratch.toTarget.set(dr.targetX - g.position.x, 0, dr.targetZ - g.position.z);
-          const dist = _dragonScratch.toTarget.length();
-          if (dist < BOARD_DRAGON_TARGET_EPS) {
-            boardDragonPickTarget(dr);
-            _dragonScratch.toTarget.set(dr.targetX - g.position.x, 0, dr.targetZ - g.position.z);
+          const margin = halfBoard - BOARD_WADDLE_EDGE - 1;
+          _waddleScratch.toTarget.set(dr.targetX - g.position.x, 0, dr.targetZ - g.position.z);
+          const dist = _waddleScratch.toTarget.length();
+          if (dist < BOARD_WADDLE_TARGET_EPS) {
+            waddleBotPickTarget(dr);
+            _waddleScratch.toTarget.set(dr.targetX - g.position.x, 0, dr.targetZ - g.position.z);
           }
-          const dist2 = _dragonScratch.toTarget.length();
-          if (dist2 > 1e-5) _dragonScratch.toTarget.multiplyScalar(1 / dist2);
-          else _dragonScratch.toTarget.set(0, 0, 1);
+          const dist2 = _waddleScratch.toTarget.length();
+          if (dist2 > 1e-5) _waddleScratch.toTarget.multiplyScalar(1 / dist2);
+          else _waddleScratch.toTarget.set(0, 0, 1);
 
-          const sp = BOARD_DRAGON_RUN_SPEED * dt;
-          g.position.x += _dragonScratch.toTarget.x * sp;
-          g.position.z += _dragonScratch.toTarget.z * sp;
+          const sp = BOARD_WADDLE_RUN_SPEED * dt;
+          g.position.x += _waddleScratch.toTarget.x * sp;
+          g.position.z += _waddleScratch.toTarget.z * sp;
           g.position.x = THREE.MathUtils.clamp(g.position.x, -margin, margin);
           g.position.z = THREE.MathUtils.clamp(g.position.z, -margin, margin);
 
-          const wantYaw = Math.atan2(_dragonScratch.toTarget.x, _dragonScratch.toTarget.z);
+          const wantYaw = Math.atan2(_waddleScratch.toTarget.x, _waddleScratch.toTarget.z);
           let dy = wantYaw - g.rotation.y;
           dy = ((dy + Math.PI) % (Math.PI * 2)) - Math.PI;
           const turn = 1 - Math.exp(-11 * dt);
@@ -5156,62 +5103,46 @@
 
           let groundY = sampleSurfaceY(g.position.x, g.position.z);
           if (groundY == null) groundY = sampleSurfaceY(player.position.x, player.position.z) || 0;
-          const targetRootY = groundY + BOARD_DRAGON_BODY_Y;
+          const targetRootY = groundY + BOARD_WADDLE_BODY_Y;
           const kGround = 1 - Math.exp(-18 * dt);
           g.position.y += (targetRootY - g.position.y) * kGround;
 
-          const moveLen = Math.hypot(_dragonScratch.toTarget.x * sp, _dragonScratch.toTarget.z * sp);
+          const moveLen = Math.hypot(_waddleScratch.toTarget.x * sp, _waddleScratch.toTarget.z * sp);
           const moving = moveLen > 0.0004;
           if (moving) {
-            dr.walkPhase += dt * (10.2 + moveLen * 420);
+            dr.walkPhase += dt * (7.2 + moveLen * 320);
           }
           const ph = dr.walkPhase;
-          const swingH = 0.52;
-          const swingK = 0.38;
 
-          function applyLeg(leg, phaseOff) {
-            const s = Math.sin(ph + phaseOff);
-            const c = Math.cos(ph + phaseOff);
-            leg.hip.rotation.x = swingH * s;
-            leg.knee.rotation.x = Math.max(0, -s) * swingK + 0.08 * Math.max(0, c);
-          }
-          applyLeg(dr.legFL, 0);
-          applyLeg(dr.legBR, 0);
-          applyLeg(dr.legFR, Math.PI);
-          applyLeg(dr.legBL, Math.PI);
+          const sL = Math.sin(ph);
+          const sR = Math.sin(ph + Math.PI);
+          dr.legL.hip.rotation.x = 0.62 * sL;
+          dr.legL.hip.rotation.z = 0.16 * Math.sin(ph);
+          dr.legL.knee.rotation.x =
+            0.62 * Math.max(0, -sL) + 0.12 * Math.max(0, Math.cos(ph - 0.35));
 
-          const bobAmp = moving ? 0.045 : 0.012;
-          dr.bob.position.y = bobAmp * Math.sin(ph * 2);
-          dr.torso.rotation.z = 0.06 * Math.sin(ph + 0.4);
-          dr.torso.rotation.x = 0.04 * Math.sin(ph * 2 + 0.2);
+          dr.legR.hip.rotation.x = 0.62 * sR;
+          dr.legR.hip.rotation.z = -0.16 * Math.sin(ph);
+          dr.legR.knee.rotation.x =
+            0.62 * Math.max(0, -sR) + 0.12 * Math.max(0, Math.cos(ph + Math.PI - 0.35));
 
-          dr.tailSegs[0].rotation.y = 0.18 * Math.sin(ph * 0.5 + 0.2);
-          dr.tailSegs[0].rotation.x = -0.12 + 0.06 * Math.sin(ph * 0.5);
-          if (dr.tailSegs[1]) {
-            dr.tailSegs[1].rotation.y = 0.22 * Math.sin(ph * 0.5 - 0.35);
-            dr.tailSegs[1].rotation.x = 0.05 * Math.sin(ph * 0.5 - 0.2);
-          }
-          if (dr.tailSegs[2]) {
-            dr.tailSegs[2].rotation.y = 0.26 * Math.sin(ph * 0.5 - 0.9);
-            dr.tailSegs[2].rotation.x = 0.06 * Math.sin(ph * 0.5 - 0.5);
-          }
-          if (dr.tailSegs[3]) {
-            dr.tailSegs[3].rotation.y = 0.3 * Math.sin(ph * 0.5 - 1.4);
-            dr.tailSegs[3].rotation.x = 0.07 * Math.sin(ph * 0.5 - 0.8);
-          }
+          dr.torso.rotation.z = moving ? 0.28 * Math.sin(ph) : 0.1 * Math.sin(ph);
+          dr.torso.rotation.x = moving ? 0.1 * Math.sin(ph * 2) : 0.02 * Math.sin(ph * 2);
+          dr.bob.position.y = moving ? 0.07 * Math.abs(Math.sin(ph * 2)) : 0.015 * Math.sin(ph * 2);
 
-          dr.neck0.rotation.x = -0.12 + 0.06 * Math.sin(ph * 2 + 0.5);
-          dr.neck0.rotation.y = 0.05 * Math.sin(ph * 0.5);
-          dr.neck1.rotation.x = 0.05 * Math.sin(ph * 2 - 0.2);
-          dr.neck2.rotation.x = 0.04 * Math.sin(ph * 2 - 0.5);
-          dr.head.rotation.x = 0.06 * Math.sin(ph * 2 + 1.1);
-          dr.head.rotation.y = 0.04 * Math.sin(ph * 0.5 + 0.3);
+          dr.armL.rotation.x = -0.85 * Math.sin(ph + Math.PI);
+          dr.armL.rotation.z = 0.12 * Math.sin(ph * 2);
+          dr.armR.rotation.x = -0.85 * Math.sin(ph);
+          dr.armR.rotation.z = -0.12 * Math.sin(ph * 2);
 
-          const flap = 0.12 * Math.sin(ph * 3.2);
-          dr.wingL.rotation.x = -0.32 + flap;
-          dr.wingR.rotation.x = -0.32 + flap;
-          dr.wingL.rotation.z = 0.15 + 0.08 * Math.sin(ph * 3);
-          dr.wingR.rotation.z = -0.15 - 0.08 * Math.sin(ph * 3);
+          dr.head.rotation.z = moving ? -0.22 * Math.sin(ph) : -0.06 * Math.sin(ph);
+          dr.head.rotation.x = 0.08 * Math.sin(ph * 2 + 0.4);
+          dr.antenna.rotation.z = 0.55 * Math.sin(ph * 3.1);
+          dr.antenna.rotation.x = 0.12 * Math.sin(ph * 2.8);
+
+          const goog = 0.04 * Math.sin(ph * 6.2);
+          dr.pupilL.position.x = 0.03 + goog;
+          dr.pupilR.position.x = -0.03 - goog;
         }
 
         function updatePondTint(dt) {
@@ -6101,7 +6032,7 @@
           return hits.length ? hits[0].point.y : null;
         }
 
-        spawnBoardDragon();
+        spawnBoardWaddleBot();
 
         function raycastDownSurface(x, z, outPoint, outNormal) {
           downRayOrigin.set(x, 220, z);
@@ -6806,7 +6737,7 @@
             spawnNpc();
           }
           updateNpcs(dt);
-          updateBoardDragon(dt);
+          updateBoardWaddleBot(dt);
           updatePropPhysics("cube", dt);
           updatePropPhysics("ball", dt);
           resolveBallCubeCollision();
