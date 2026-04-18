@@ -741,7 +741,10 @@
           matAdd.uniforms.uIntensity.value = bloom.intensity;
           bloomQuad.material = matAdd;
           renderer.setRenderTarget(null);
+          const prevAutoClear = renderer.autoClear;
+          renderer.autoClear = false;
           renderer.render(bloom.scene, bloomOrtho);
+          renderer.autoClear = prevAutoClear;
         }
 
         // Lightweight screen-space lens flare overlay (no extra deps).
@@ -6593,6 +6596,9 @@
           updatePropPhysics("ball", dt);
           resolveBallCubeCollision();
           updatePondTint(dt);
+          // Explicit clear (we do post passes later; don't rely on autoClear).
+          renderer.setRenderTarget(null);
+          renderer.clear(true, true, true);
           // Ensure stencil starts clean each frame (autoClearStencil isn't always reliable across browsers).
           renderer.clearStencil();
           renderer.render(scene, camera);
