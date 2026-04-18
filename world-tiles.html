@@ -573,6 +573,18 @@
         });
 
       function initGame() {
+        try {
+          const _p = new URLSearchParams(window.location.search);
+          if (_p.has("resetWorld") || _p.has("clearWorld")) {
+            localStorage.removeItem("billboardWorldTilesV1");
+            _p.delete("resetWorld");
+            _p.delete("clearWorld");
+            const _q = _p.toString();
+            location.replace(window.location.pathname + (_q ? "?" + _q : "") + window.location.hash);
+            return;
+          }
+        } catch (e) {}
+
         let renderer;
         try {
           renderer = new THREE.WebGLRenderer({
@@ -853,7 +865,11 @@
             return null;
           }
         }
-        /** Restore from localStorage unless ?new=1 / ?fresh=1 or ?seed=… (explicit new layout). */
+        /**
+         * Refresh keeps the same island: snapshot is in localStorage (by design).
+         * New layout: ?new=1 or ?fresh=1 or ?seed=yourstring
+         * Clear saved map only: ?resetWorld=1 (then reloads with a fresh random map).
+         */
         const worldLandInit = (function () {
           try {
             const params = new URLSearchParams(window.location.search);
