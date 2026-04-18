@@ -578,12 +578,13 @@
           renderer = new THREE.WebGLRenderer({
             antialias: true,
               stencil: true,
+            alpha: false,
             powerPreference: "high-performance",
             failIfMajorPerformanceCaveat: false
           });
         } catch (e1) {
           try {
-            renderer = new THREE.WebGLRenderer({ antialias: false, stencil: true, failIfMajorPerformanceCaveat: false });
+            renderer = new THREE.WebGLRenderer({ antialias: false, stencil: true, alpha: false, failIfMajorPerformanceCaveat: false });
           } catch (e2) {
             throw new Error("WebGLRenderer failed: " + (e2 && e2.message));
           }
@@ -767,6 +768,8 @@
         const scene = new THREE.Scene();
         // Background is the horizon base; sky dome shader adds zenith gradient.
         scene.background = new THREE.Color(0xa9ddff);
+        // Ensure the canvas is fully opaque (prevents dark ground tiles looking transparent on some browsers).
+        renderer.setClearColor(scene.background, 1);
 
         const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 2200);
         const clock = new THREE.Clock();
