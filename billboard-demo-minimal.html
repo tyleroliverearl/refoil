@@ -587,6 +587,152 @@
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         document.body.appendChild(renderer.domElement);
 
+        // --- Dreamy bloom (lightweight postprocess, no extra deps) ---
+        const bloom = {
+          enabled: true,
+          threshold: 0.66,
+          intensity: 0.75,
+          radius: 1.35,
+          downsample: 2
+        };
+        let bloomW = 0;
+        let bloomH = 0;
+        let rtScene = null;
+        let rtBright = null;
+        let rtPing = null;
+        let rtPong = null;
+        let bloomOrtho = null;
+        let bloomQuad = null;
+        let matBright = null;
+        let matBlur = null;
+        let matAdd = null;
+
+        function makeRt(w, h) {
+          return new THREE.WebGLRenderTarget(w, h, {
+            depthBuffer: false,
+            stencilBuffer: false,
+            samples: 0
+          });
+        }
+
+        function ensureBloomTargets() {
+          const w = Math.max(2, Math.floor(window.innerWidth / bloom.downsample));
+          const h = Math.max(2, Math.floor(window.innerHeight / bloom.downsample));
+          if (rtScene && w === bloomW && h === bloomH) return;
+          bloomW = w;
+          bloomH = h;
+          if (rtScene) {
+            rtScene.dispose();
+            rtBright.dispose();
+            rtPing.dispose();
+            rtPong.dispose();
+          }
+          rtScene = makeRt(w, h);
+          rtBright = makeRt(w, h);
+          rtPing = makeRt(w, h);
+          rtPong = makeRt(w, h);
+        }
+
+        function ensureBloomPipeline() {
+          if (bloomOrtho) return;
+          bloomOrtho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+          const quadGeo = new THREE.PlaneGeometry(2, 2);
+
+          matBright = new THREE.ShaderMaterial({
+            uniforms: {
+              tScene: { value: null },
+              uThreshold: { value: bloom.threshold }
+            },
+            vertexShader:
+              "varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }",
+            fragmentShader:
+              "precision mediump float; varying vec2 vUv; uniform sampler2D tScene; uniform float uThreshold;" +
+              "void main(){ vec3 c = texture2D(tScene, vUv).rgb;" +
+              "float l = dot(c, vec3(0.2126,0.7152,0.0722));" +
+              "float m = smoothstep(uThreshold, uThreshold + 0.12, l);" +
+              "gl_FragColor = vec4(c * m, 1.0);" +
+              "}"
+          });
+
+          matBlur = new THREE.ShaderMaterial({
+            uniforms: {
+              tIn: { value: null },
+              uTexel: { value: new THREE.Vector2(1 / 256, 1 / 256) },
+              uDir: { value: new THREE.Vector2(1, 0) },
+              uRadius: { value: bloom.radius }
+            },
+            vertexShader:
+              "varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }",
+            fragmentShader:
+              "precision mediump float; varying vec2 vUv; uniform sampler2D tIn; uniform vec2 uTexel; uniform vec2 uDir; uniform float uRadius;" +
+              "void main(){ vec2 o = uTexel * uDir * uRadius;" +
+              "vec3 s = texture2D(tIn, vUv).rgb * 0.227027;" +
+              "s += texture2D(tIn, vUv + o * 1.384615).rgb * 0.316216;" +
+              "s += texture2D(tIn, vUv - o * 1.384615).rgb * 0.316216;" +
+              "s += texture2D(tIn, vUv + o * 3.230769).rgb * 0.070270;" +
+              "s += texture2D(tIn, vUv - o * 3.230769).rgb * 0.070270;" +
+              "gl_FragColor = vec4(s, 1.0);" +
+              "}"
+          });
+
+          matAdd = new THREE.ShaderMaterial({
+            uniforms: {
+              tBloom: { value: null },
+              uIntensity: { value: bloom.intensity }
+            },
+            transparent: true,
+            depthTest: false,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            vertexShader:
+              "varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }",
+            fragmentShader:
+              "precision mediump float; varying vec2 vUv; uniform sampler2D tBloom; uniform float uIntensity;" +
+              "void main(){ vec3 b = texture2D(tBloom, vUv).rgb; gl_FragColor = vec4(b * uIntensity, 1.0); }"
+          });
+
+          bloomQuad = new THREE.Mesh(quadGeo, matBright);
+          const s = new THREE.Scene();
+          s.add(bloomQuad);
+          bloom.scene = s;
+        }
+
+        function renderBloom() {
+          if (!bloom.enabled) return;
+          ensureBloomTargets();
+          ensureBloomPipeline();
+
+          renderer.setRenderTarget(rtScene);
+          renderer.clear(true, true, true);
+          renderer.render(scene, camera);
+
+          matBright.uniforms.tScene.value = rtScene.texture;
+          matBright.uniforms.uThreshold.value = bloom.threshold;
+          bloomQuad.material = matBright;
+          renderer.setRenderTarget(rtBright);
+          renderer.render(bloom.scene, bloomOrtho);
+
+          matBlur.uniforms.uTexel.value.set(1 / bloomW, 1 / bloomH);
+          matBlur.uniforms.uRadius.value = bloom.radius;
+
+          matBlur.uniforms.tIn.value = rtBright.texture;
+          matBlur.uniforms.uDir.value.set(1, 0);
+          bloomQuad.material = matBlur;
+          renderer.setRenderTarget(rtPing);
+          renderer.render(bloom.scene, bloomOrtho);
+
+          matBlur.uniforms.tIn.value = rtPing.texture;
+          matBlur.uniforms.uDir.value.set(0, 1);
+          renderer.setRenderTarget(rtPong);
+          renderer.render(bloom.scene, bloomOrtho);
+
+          matAdd.uniforms.tBloom.value = rtPong.texture;
+          matAdd.uniforms.uIntensity.value = bloom.intensity;
+          bloomQuad.material = matAdd;
+          renderer.setRenderTarget(null);
+          renderer.render(bloom.scene, bloomOrtho);
+        }
+
         // Lightweight screen-space lens flare overlay (no extra deps).
         const flareCanvas = document.createElement("canvas");
         flareCanvas.style.cssText =
@@ -6371,6 +6517,7 @@
         // Ensure stencil starts clean each frame.
         renderer.clearStencil();
           renderer.render(scene, camera);
+          renderBloom();
           requestAnimationFrame(animate);
         }
         animate();
@@ -6398,6 +6545,7 @@
           camera.updateProjectionMatrix();
           renderer.setSize(innerWidth, innerHeight);
           resizeFlare();
+          bloomW = 0;
         });
       }
     })();
