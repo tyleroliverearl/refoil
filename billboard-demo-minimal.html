@@ -13,7 +13,7 @@
       -webkit-user-select: none;
       -webkit-touch-callout: none;
     }
-    canvas { touch-action: none; display: block; }
+    canvas { touch-action: none; display: block; background: #a9ddff; }
     #hud {
       position: fixed; top: 10px; left: 10px; z-index: 10;
       color: #fff; font: 12px/1.4 system-ui, sans-serif;
@@ -573,12 +573,19 @@
             antialias: true,
             stencil: true,
             alpha: false,
+            premultipliedAlpha: false,
             powerPreference: "high-performance",
             failIfMajorPerformanceCaveat: false
           });
         } catch (e1) {
           try {
-            renderer = new THREE.WebGLRenderer({ antialias: false, stencil: true, alpha: false, failIfMajorPerformanceCaveat: false });
+            renderer = new THREE.WebGLRenderer({
+              antialias: false,
+              stencil: true,
+              alpha: false,
+              premultipliedAlpha: false,
+              failIfMajorPerformanceCaveat: false
+            });
           } catch (e2) {
             throw new Error("WebGLRenderer failed: " + (e2 && e2.message));
           }
@@ -586,173 +593,12 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 3));
         renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.NoToneMapping;
+        renderer.toneMappingExposure = 1;
         document.body.appendChild(renderer.domElement);
-
-        // --- Dreamy bloom (lightweight postprocess, no extra deps) ---
-        const bloom = {
-          enabled: true,
-          threshold: 0.66,
-          intensity: 0.75,
-          radius: 1.35,
-          downsample: 2
-        };
-        let bloomW = 0;
-        let bloomH = 0;
-        let rtScene = null;
-        let rtBright = null;
-        let rtPing = null;
-        let rtPong = null;
-        let bloomOrtho = null;
-        let bloomQuad = null;
-        let matBright = null;
-        let matBlur = null;
-        let matAdd = null;
-
-        function makeRt(w, h) {
-          return new THREE.WebGLRenderTarget(w, h, {
-            depthBuffer: false,
-            stencilBuffer: false,
-            samples: 0
-          });
-        }
-
-        function ensureBloomTargets() {
-          const w = Math.max(2, Math.floor(window.innerWidth / bloom.downsample));
-          const h = Math.max(2, Math.floor(window.innerHeight / bloom.downsample));
-          if (rtScene && w === bloomW && h === bloomH) return;
-          bloomW = w;
-          bloomH = h;
-          if (rtScene) {
-            rtScene.dispose();
-            rtBright.dispose();
-            rtPing.dispose();
-            rtPong.dispose();
-          }
-          rtScene = makeRt(w, h);
-          rtBright = makeRt(w, h);
-          rtPing = makeRt(w, h);
-          rtPong = makeRt(w, h);
-        }
-
-        function ensureBloomPipeline() {
-          if (bloomOrtho) return;
-          bloomOrtho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-          const quadGeo = new THREE.PlaneGeometry(2, 2);
-
-          matBright = new THREE.ShaderMaterial({
-            uniforms: {
-              tScene: { value: null },
-              uThreshold: { value: bloom.threshold }
-            },
-            vertexShader:
-              "varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }",
-            fragmentShader:
-              "precision mediump float; varying vec2 vUv; uniform sampler2D tScene; uniform float uThreshold;" +
-              "void main(){ vec3 c = texture2D(tScene, vUv).rgb;" +
-              "float l = dot(c, vec3(0.2126,0.7152,0.0722));" +
-              "float m = smoothstep(uThreshold, uThreshold + 0.12, l);" +
-              "gl_FragColor = vec4(c * m, 1.0);" +
-              "}"
-          });
-
-          matBlur = new THREE.ShaderMaterial({
-            uniforms: {
-              tIn: { value: null },
-              uTexel: { value: new THREE.Vector2(1 / 256, 1 / 256) },
-              uDir: { value: new THREE.Vector2(1, 0) },
-              uRadius: { value: bloom.radius }
-            },
-            vertexShader:
-              "varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }",
-            fragmentShader:
-              "precision mediump float; varying vec2 vUv; uniform sampler2D tIn; uniform vec2 uTexel; uniform vec2 uDir; uniform float uRadius;" +
-              "void main(){ vec2 o = uTexel * uDir * uRadius;" +
-              "vec3 s = texture2D(tIn, vUv).rgb * 0.227027;" +
-              "s += texture2D(tIn, vUv + o * 1.384615).rgb * 0.316216;" +
-              "s += texture2D(tIn, vUv - o * 1.384615).rgb * 0.316216;" +
-              "s += texture2D(tIn, vUv + o * 3.230769).rgb * 0.070270;" +
-              "s += texture2D(tIn, vUv - o * 3.230769).rgb * 0.070270;" +
-              "gl_FragColor = vec4(s, 1.0);" +
-              "}"
-          });
-
-          matAdd = new THREE.ShaderMaterial({
-            uniforms: {
-              tBloom: { value: null },
-              uIntensity: { value: bloom.intensity }
-            },
-            transparent: true,
-            depthTest: false,
-            depthWrite: false,
-            blending: THREE.AdditiveBlending,
-            vertexShader:
-              "varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }",
-            fragmentShader:
-              "precision mediump float; varying vec2 vUv; uniform sampler2D tBloom; uniform float uIntensity;" +
-              "void main(){ vec3 b = texture2D(tBloom, vUv).rgb; gl_FragColor = vec4(b * uIntensity, 1.0); }"
-          });
-
-          bloomQuad = new THREE.Mesh(quadGeo, matBright);
-          const s = new THREE.Scene();
-          s.add(bloomQuad);
-          bloom.scene = s;
-        }
-
-        function renderBloom() {
-          if (!bloom.enabled) return;
-          ensureBloomTargets();
-          ensureBloomPipeline();
-
-          renderer.setRenderTarget(rtScene);
-          renderer.clear(true, true, true);
-          renderer.render(scene, camera);
-
-          matBright.uniforms.tScene.value = rtScene.texture;
-          matBright.uniforms.uThreshold.value = bloom.threshold;
-          bloomQuad.material = matBright;
-          renderer.setRenderTarget(rtBright);
-          renderer.render(bloom.scene, bloomOrtho);
-
-          matBlur.uniforms.uTexel.value.set(1 / bloomW, 1 / bloomH);
-          matBlur.uniforms.uRadius.value = bloom.radius;
-
-          matBlur.uniforms.tIn.value = rtBright.texture;
-          matBlur.uniforms.uDir.value.set(1, 0);
-          bloomQuad.material = matBlur;
-          renderer.setRenderTarget(rtPing);
-          renderer.render(bloom.scene, bloomOrtho);
-
-          matBlur.uniforms.tIn.value = rtPing.texture;
-          matBlur.uniforms.uDir.value.set(0, 1);
-          renderer.setRenderTarget(rtPong);
-          renderer.render(bloom.scene, bloomOrtho);
-
-          matAdd.uniforms.tBloom.value = rtPong.texture;
-          matAdd.uniforms.uIntensity.value = bloom.intensity;
-          bloomQuad.material = matAdd;
-          renderer.setRenderTarget(null);
-          const prevAutoClear = renderer.autoClear;
-          renderer.autoClear = false;
-          renderer.render(bloom.scene, bloomOrtho);
-          renderer.autoClear = prevAutoClear;
-        }
-
-        // Lightweight screen-space lens flare overlay (no extra deps).
-        const flareCanvas = document.createElement("canvas");
-        flareCanvas.style.cssText =
-          "position:fixed;inset:0;z-index:60;pointer-events:none;" +
-          "mix-blend-mode:screen;opacity:1;";
-        document.body.appendChild(flareCanvas);
-        const flareCtx = flareCanvas.getContext("2d");
-        function resizeFlare() {
-          const dpr = Math.min(window.devicePixelRatio || 1, 3);
-          flareCanvas.width = Math.floor(window.innerWidth * dpr);
-          flareCanvas.height = Math.floor(window.innerHeight * dpr);
-          flareCanvas.style.width = window.innerWidth + "px";
-          flareCanvas.style.height = window.innerHeight + "px";
-          flareCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        }
-        resizeFlare();
+        try {
+          renderer.domElement.style.background = "#a9ddff";
+        } catch (e) {}
 
         const scene = new THREE.Scene();
         // Background is the horizon base; sky dome shader adds zenith gradient.
@@ -792,70 +638,6 @@
         sun.position.set(10, 16, 8);
         scene.add(sun);
 
-        // Minecraft-ish noise clouds: blocky thresholded noise on a sky plane.
-        function makeCloudNoiseTexture(size) {
-          const c = document.createElement("canvas");
-          c.width = size;
-          c.height = size;
-          const ctx = c.getContext("2d");
-          const img = ctx.createImageData(size, size);
-          const d = img.data;
-
-          // Cheap value-noise by upscaling coarse random grid.
-          const cell = 8;
-          const gw = Math.ceil(size / cell) + 1;
-          const gh = Math.ceil(size / cell) + 1;
-          const g = new Float32Array(gw * gh);
-          let s = 0x9e3779b9 ^ (Date.now() & 0xffffffff);
-          function rng() {
-            s ^= (s << 13) >>> 0;
-            s ^= (s >>> 17) >>> 0;
-            s ^= (s << 5) >>> 0;
-            return (s >>> 0) / 4294967296;
-          }
-          for (let i = 0; i < g.length; i++) g[i] = rng();
-
-          function smoothstep(a, b, x) {
-            const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
-            return t * t * (3 - 2 * t);
-          }
-          function lerp(a, b, t) { return a + (b - a) * t; }
-
-          for (let y = 0; y < size; y++) {
-            const gy0 = Math.floor(y / cell);
-            const fy = (y / cell) - gy0;
-            const sy = smoothstep(0, 1, fy);
-            for (let x = 0; x < size; x++) {
-              const gx0 = Math.floor(x / cell);
-              const fx = (x / cell) - gx0;
-              const sx = smoothstep(0, 1, fx);
-              const a = g[gy0 * gw + gx0];
-              const b = g[gy0 * gw + (gx0 + 1)];
-              const c0 = g[(gy0 + 1) * gw + gx0];
-              const d0 = g[(gy0 + 1) * gw + (gx0 + 1)];
-              const v = lerp(lerp(a, b, sx), lerp(c0, d0, sx), sy);
-
-              const p = (y * size + x) * 4;
-              const vv = Math.floor(v * 255);
-              d[p] = vv;
-              d[p + 1] = vv;
-              d[p + 2] = vv;
-              d[p + 3] = 255;
-            }
-          }
-          ctx.putImageData(img, 0, 0);
-
-          const tex = new THREE.CanvasTexture(c);
-          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-          tex.colorSpace = THREE.SRGBColorSpace;
-          tex.magFilter = THREE.NearestFilter; // blocky
-          tex.minFilter = THREE.NearestFilter; // blocky
-          tex.generateMipmaps = false;
-          return tex;
-        }
-
-        // (Cloud noise texture kept for legacy experiments; voxel clouds below don't use it.)
-        const cloudNoiseTex = makeCloudNoiseTexture(256);
         const cloudMat = new THREE.ShaderMaterial({
           uniforms: {
             uTime: { value: 0 },
@@ -927,7 +709,7 @@
             "  float dens = puff(cell, local);\n" +
             "  dens *= hf;\n" +
             "  // Boost so voxel puffs are clearly visible.\n" +
-            "  dens *= 2.35;\n" +
+            "  dens *= 1.35;\n" +
             "  return dens;\n" +
             "}\n" +
             "float voxelSlice(vec3 rd, float y, float cell, float occThresh, vec2 wind){\n" +
@@ -970,21 +752,15 @@
             "  float a1 = voxelBand(rd, 18.0, 10.0, 0.62, wind * 0.72 + vec2(13.0, -7.0));\n" +
             "  float a2 = voxelBand(rd, 26.0, 13.5, 0.66, wind * 0.48 + vec2(-21.0, 5.0));\n" +
             "  float a = clamp(a0 * 1.05 + a1 * 0.95 + a2 * 0.8, 0.0, 1.0);\n" +
-            "  // Whiter/brighter voxel clouds.\n" +
-            "  vec3 c0 = mix(uTint, vec3(0.75, 0.96, 1.0), 0.62);\n" +
-            "  vec3 c1 = mix(uTint, vec3(0.62, 0.90, 1.0), 0.72);\n" +
-            "  vec3 c2 = mix(uTint, vec3(0.86, 0.99, 1.0), 0.48);\n" +
+            "  vec3 c0 = mix(uTint, vec3(0.72, 0.90, 1.0), 0.42);\n" +
+            "  vec3 c1 = mix(uTint, vec3(0.60, 0.84, 1.0), 0.48);\n" +
+            "  vec3 c2 = mix(uTint, vec3(0.78, 0.94, 1.0), 0.38);\n" +
             "  vec3 cloudCol = (c0 * a0 + c1 * a1 + c2 * a2) / max(1e-4, (a0 + a1 + a2));\n" +
-            "  // Bright, cartoony highlight toward white.\n" +
-            "  float hi = smoothstep(0.15, 0.95, a);\n" +
-            "  cloudCol = mix(cloudCol, vec3(1.0), 0.55 * hi);\n" +
-            "  float aOut = a * 1.0 * horizonFade;\n" +
-            "  // Small bloom: gentle glow.\n" +
-            "  float bloom = 0.08 * pow(clamp(aOut, 0.0, 1.0), 0.75);\n" +
+            "  float aOut = a * 0.78 * horizonFade;\n" +
             "  vec3 outCol = mix(sky, cloudCol, aOut);\n" +
-            "  outCol += bloom * vec3(0.9, 0.95, 1.0);\n" +
             "  gl_FragColor = vec4(outCol, 1.0);\n" +
-            "}\n"
+            "}\n",
+          toneMapped: false
         });
         const cloudDome = new THREE.Mesh(new THREE.SphereGeometry(220, 24, 16), cloudMat);
         cloudDome.renderOrder = -1000;
@@ -1018,11 +794,11 @@
         starGeom.setAttribute("position", new THREE.BufferAttribute(starPos, 3));
         starGeom.setAttribute("color", new THREE.BufferAttribute(starCol, 3));
         const starMat = new THREE.PointsMaterial({
-          size: 1.35,
+          size: 1.15,
           sizeAttenuation: true,
           vertexColors: true,
           transparent: true,
-          opacity: 0.85,
+          opacity: 0.5,
           depthWrite: false,
           depthTest: true
         });
@@ -1031,65 +807,14 @@
         stars.frustumCulled = false;
         scene.add(stars);
 
-        function makeIvoryCheckerTexture(size, squares) {
-          const c = document.createElement("canvas");
-          c.width = size;
-          c.height = size;
-          const ctx = c.getContext("2d");
-          const img = ctx.createImageData(size, size);
-          const d = img.data;
-
-          // Slight grain in ivory squares to feel like a material.
-          let s = 0x7f4a7c15 ^ (Date.now() & 0xffffffff);
-          function rng() {
-            s ^= (s << 13) >>> 0;
-            s ^= (s >>> 17) >>> 0;
-            s ^= (s << 5) >>> 0;
-            return (s >>> 0) / 4294967296;
-          }
-
-          const ivory = { r: 255, g: 255, b: 255 }; // true white
-          const dark = { r: 12, g: 12, b: 14 };
-          for (let y = 0; y < size; y++) {
-            const ty = Math.floor((y / size) * squares);
-            for (let x = 0; x < size; x++) {
-              const tx = Math.floor((x / size) * squares);
-              const isIvory = ((tx + ty) & 1) === 1;
-              const p = (y * size + x) * 4;
-              if (isIvory) {
-                // Keep these strictly white (no tint/grain) so the board reads white/black.
-                d[p] = ivory.r;
-                d[p + 1] = ivory.g;
-                d[p + 2] = ivory.b;
-              } else {
-                d[p] = dark.r;
-                d[p + 1] = dark.g;
-                d[p + 2] = dark.b;
-              }
-              d[p + 3] = 255;
-            }
-          }
-          ctx.putImageData(img, 0, 0);
-
-          const tex = new THREE.CanvasTexture(c);
-          tex.colorSpace = THREE.SRGBColorSpace;
-          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-          tex.magFilter = THREE.NearestFilter;
-          tex.minFilter = THREE.NearestMipMapLinearFilter;
-          tex.generateMipmaps = true;
-          tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
-          tex.needsUpdate = true;
-          return tex;
-        }
+        /** Cliff walls — world-space checker. Ground uses DataTexture so black is opaque sRGB 0. */
         function createWorldCheckerMaterial(axisU, axisV, offsetU, offsetV, tileSize) {
           return new THREE.ShaderMaterial({
             uniforms: {
               uAxisU: { value: axisU.clone() },
               uAxisV: { value: axisV.clone() },
               uOffset: { value: new THREE.Vector2(offsetU, offsetV) },
-              uTile: { value: tileSize },
-              uWhite: { value: new THREE.Color(0xffffff) },
-              uBlack: { value: new THREE.Color(0x000000) }
+              uTile: { value: tileSize }
             },
             vertexShader:
               "varying vec3 vWorld;\n" +
@@ -1103,18 +828,19 @@
               "uniform vec3 uAxisV;\n" +
               "uniform vec2 uOffset;\n" +
               "uniform float uTile;\n" +
-              "uniform vec3 uWhite;\n" +
-              "uniform vec3 uBlack;\n" +
               "varying vec3 vWorld;\n" +
               "void main(){\n" +
               "  float uu = dot(vWorld, uAxisU) + uOffset.x;\n" +
               "  float vv = dot(vWorld, uAxisV) + uOffset.y;\n" +
-              "  float a = floor(uu / uTile);\n" +
-              "  float b = floor(vv / uTile);\n" +
-              "  float ch = mod(a + b, 2.0);\n" +
-              "  vec3 col = mix(uBlack, uWhite, step(0.5, ch));\n" +
+              "  float ia = floor(uu / uTile);\n" +
+              "  float ib = floor(vv / uTile);\n" +
+              "  float t = mod(ia + ib + 1000.0, 2.0);\n" +
+              "  vec3 col = mix(vec3(0.0), vec3(1.0), t);\n" +
               "  gl_FragColor = vec4(col, 1.0);\n" +
               "}\n",
+            toneMapped: false,
+            depthWrite: true,
+            depthTest: true,
             side: THREE.DoubleSide
           });
         }
@@ -1122,13 +848,38 @@
         const halfBoard = 70;
         const TILE_SQUARES = 35;
         const TILE_WORLD = (halfBoard * 2) / TILE_SQUARES;
-        const groundMat = createWorldCheckerMaterial(
-          new THREE.Vector3(1, 0, 0), // U = world X
-          new THREE.Vector3(0, 0, 1), // V = world Z
-          halfBoard,
-          halfBoard,
-          TILE_WORLD
-        );
+
+        function makeCheckerDataTexture(squares) {
+          const size = 256;
+          const data = new Uint8Array(size * size * 4);
+          for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+              const tx = Math.floor((x / size) * squares);
+              const ty = Math.floor((y / size) * squares);
+              const white = ((tx + ty) & 1) === 1;
+              const o = (y * size + x) * 4;
+              data[o] = white ? 255 : 0;
+              data[o + 1] = white ? 255 : 0;
+              data[o + 2] = white ? 255 : 0;
+              data[o + 3] = 255;
+            }
+          }
+          const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+          tex.repeat.set(1, 1);
+          tex.flipY = false;
+          tex.magFilter = THREE.NearestFilter;
+          tex.minFilter = THREE.NearestFilter;
+          tex.generateMipmaps = false;
+          tex.needsUpdate = true;
+          return tex;
+        }
+
+        const groundMat = new THREE.MeshBasicMaterial({
+          map: makeCheckerDataTexture(TILE_SQUARES),
+          toneMapped: false
+        });
         const ground = new THREE.Mesh(new THREE.PlaneGeometry(140, 140), groundMat);
         ground.rotation.x = -Math.PI / 2;
         scene.add(ground);
@@ -1290,8 +1041,8 @@
             depthTest: true,
             depthWrite: false,
             polygonOffset: true,
-            polygonOffsetFactor: 1,
-            polygonOffsetUnits: 1
+            polygonOffsetFactor: -1,
+            polygonOffsetUnits: -2
           });
         }
         function pyramidCartoonColor(hex) {
@@ -5171,278 +4922,6 @@
         updateCamera(1);
         const spiralNdc = new THREE.Vector3();
         let flareTime = 0;
-        const flareRng = (function () {
-          let s = 0x12345678 ^ (Date.now() & 0xffffffff);
-          return function () {
-            // xorshift32
-            s ^= (s << 13) >>> 0;
-            s ^= (s >>> 17) >>> 0;
-            s ^= (s << 5) >>> 0;
-            return (s >>> 0) / 4294967296;
-          };
-        })();
-        const flareSeeds = new Map(); // key -> { ang, hue0 }
-        const sunGlare = { active: false, start: 0, dur: 0, x: 0, y: 0, hue: 50 };
-        const flareScratch = {
-          ndcA: new THREE.Vector3(),
-          ndcB: new THREE.Vector3(),
-          rayDir: new THREE.Vector3()
-        };
-        function fract(x) {
-          return x - Math.floor(x);
-        }
-        function hash13JS(x, y, z) {
-          // Mirrors shader hash13(vec3).
-          x = fract(x * 0.1031);
-          y = fract(y * 0.1031);
-          z = fract(z * 0.1031);
-          const dot = x * (y + 33.33) + y * (z + 33.33) + z * (x + 33.33);
-          x += dot;
-          y += dot;
-          z += dot;
-          return fract((x + y) * z);
-        }
-        function smoothstepJS(a, b, x) {
-          const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
-          return t * t * (3 - 2 * t);
-        }
-        function vnoise3JS(px, py, pz) {
-          const x0 = Math.floor(px),
-            y0 = Math.floor(py),
-            z0 = Math.floor(pz);
-          const fx = px - x0,
-            fy = py - y0,
-            fz = pz - z0;
-          const ux = fx * fx * (3 - 2 * fx),
-            uy = fy * fy * (3 - 2 * fy),
-            uz = fz * fz * (3 - 2 * fz);
-          const h = hash13JS;
-          const n000 = h(x0, y0, z0),
-            n100 = h(x0 + 1, y0, z0),
-            n010 = h(x0, y0 + 1, z0),
-            n110 = h(x0 + 1, y0 + 1, z0),
-            n001 = h(x0, y0, z0 + 1),
-            n101 = h(x0 + 1, y0, z0 + 1),
-            n011 = h(x0, y0 + 1, z0 + 1),
-            n111 = h(x0 + 1, y0 + 1, z0 + 1);
-          const x00 = n000 + ux * (n100 - n000),
-            x10 = n010 + ux * (n110 - n010),
-            x01 = n001 + ux * (n101 - n001),
-            x11 = n011 + ux * (n111 - n011);
-          const y0v = x00 + uy * (x10 - x00),
-            y1v = x01 + uy * (x11 - x01);
-          return y0v + uz * (y1v - y0v);
-        }
-        function fbmJS(px, py, pz) {
-          let x = px,
-            y = py,
-            z = pz;
-          let v = 0,
-            a = 0.5;
-          for (let i = 0; i < 4; i++) {
-            v += a * vnoise3JS(x, y, z);
-            x = x * 2.08 + 100;
-            y = y * 2.08 + 37;
-            z = z * 2.08 + 17;
-            a *= 0.505;
-          }
-          return v;
-        }
-        function warp3JS(px, py, pz) {
-          return {
-            x: (hash13JS(px * 0.37, py * 0.37, pz * 0.37) - 0.5) * 4.2,
-            y: (hash13JS(px * 0.41 + 19, py * 0.41, pz * 0.41) - 0.5) * 4.2,
-            z: (hash13JS(px * 0.39, py * 0.39, pz * 0.39 + 31) - 0.5) * 4.2
-          };
-        }
-        function cloudDensityAtWorld(wx, wy, wz, time) {
-          const baseY = 14.0;
-          const topY = 19.5;
-          const windX = time * 0.85;
-          const windZ = time * 0.52;
-          let qx = wx + windX,
-            qy = wy,
-            qz = wz + windZ;
-          const w = warp3JS(
-            qx * 0.09 + time * 0.03,
-            qy * 0.09 + time * 0.05,
-            qz * 0.09 + time * 0.02
-          );
-          qx += w.x;
-          qy += w.y;
-          qz += w.z;
-          const anim =
-            0.12 *
-            Math.sin(time * 0.4 + qx * 0.07 + qy * 0.11 + qz * 0.09);
-          let dens = fbmJS(
-            qx * 0.13 + anim,
-            qy * 0.13 + anim * 0.7,
-            qz * 0.13 + anim * 1.2
-          );
-          dens += 0.35 * fbmJS(qx * 0.27 + 2, qy * 0.27 + 1, qz * 0.27 + 0.5);
-          dens += 0.18 * fbmJS(qx * 0.51, qy * 0.51 + 5, qz * 0.51 + 3);
-          const h1 = smoothstepJS(baseY, baseY + 1.2, wy);
-          const h2 = 1 - smoothstepJS(topY - 2.0, topY, wy);
-          return dens * h1 * h2;
-        }
-        function isSkyGapAtScreenPx(px, py) {
-          // Returns true if this screen pixel is sky (no cloud voxel hit).
-          const w = window.innerWidth;
-          const h = window.innerHeight;
-          if (!w || !h) return true;
-          // Convert to NDC.
-          const nx = (px / w) * 2 - 1;
-          const ny = -(py / h) * 2 + 1;
-          // Build world ray direction.
-          flareScratch.ndcA.set(nx, ny, -1).unproject(camera);
-          flareScratch.ndcB.set(nx, ny, 1).unproject(camera);
-          flareScratch.rayDir.subVectors(flareScratch.ndcB, flareScratch.ndcA).normalize();
-          const ro = flareScratch.ndcA;
-          const rd = flareScratch.rayDir;
-          if (Math.abs(rd.y) <= 1e-4) return true;
-
-          // Must be above the horizon for the ground plane.
-          if (rd.y <= 0) return false;
-
-          // Match cloud shader params.
-          const baseY = 14.0;
-          const topY = 19.5;
-          const t0 = (baseY - ro.y) / rd.y;
-          const t1 = (topY - ro.y) / rd.y;
-          let tn = Math.min(t0, t1);
-          let tf = Math.max(t0, t1);
-          if (tf <= 0) return true;
-          tn = Math.max(tn, 0);
-
-          const dt = 0.62;
-
-          for (let i = 0; i < 32; i++) {
-            const t = tn + i * dt;
-            if (t > tf) break;
-            const wx = ro.x + rd.x * t;
-            const wy = ro.y + rd.y * t;
-            const wz = ro.z + rd.z * t;
-            if (cloudDensityAtWorld(wx, wy, wz, flareTime) > 0.54) return false;
-          }
-          return true;
-        }
-        function horizonYPx() {
-          // Find NDC y where the camera ray direction has world Y == 0 (ground-plane horizon).
-          const w = window.innerWidth;
-          const h = window.innerHeight;
-          if (!w || !h) return 0;
-          const ndcA = flareScratch.ndcA;
-          const ndcB = flareScratch.ndcB;
-          const rayDir = flareScratch.rayDir;
-          function dirYAt(ndcY) {
-            ndcA.set(0, ndcY, -1).unproject(camera);
-            ndcB.set(0, ndcY, 1).unproject(camera);
-            rayDir.subVectors(ndcB, ndcA).normalize();
-            return rayDir.y;
-          }
-          let lo = -1, hi = 1;
-          let dlo = dirYAt(lo);
-          let dhi = dirYAt(hi);
-          if (dlo === 0) return (0.5 - lo * 0.5) * h;
-          if (dhi === 0) return (0.5 - hi * 0.5) * h;
-          // If no sign change (looking straight up/down), just treat entire screen as sky.
-          if (dlo > 0 && dhi > 0) return h;
-          if (dlo < 0 && dhi < 0) return 0;
-          for (let i = 0; i < 18; i++) {
-            const mid = (lo + hi) * 0.5;
-            const dm = dirYAt(mid);
-            if (dm === 0) {
-              lo = hi = mid;
-              break;
-            }
-            if ((dm > 0) === (dlo > 0)) {
-              lo = mid;
-              dlo = dm;
-            } else {
-              hi = mid;
-              dhi = dm;
-            }
-          }
-          const yNdc = (lo + hi) * 0.5;
-          return (0.5 - yNdc * 0.5) * h;
-        }
-        function updateLensFlare() {
-          if (!flareCtx) return;
-          const w = window.innerWidth;
-          const h = window.innerHeight;
-          flareCtx.clearRect(0, 0, w, h);
-          // No spiral-centered flares. Only an occasional random sun glare from the sky.
-          // Spawn with low probability per frame, show for a brief duration.
-          if (!sunGlare.active) {
-            const spawnChance = 0.0022; // tuned for "every once in a while"
-            if (flareRng() < spawnChance) {
-              // Try a few candidates until we find a real sky gap (not clouds).
-              for (let k = 0; k < 12; k++) {
-                const x = w * (0.12 + 0.76 * flareRng());
-                const y = h * (0.04 + 0.22 * flareRng()); // top of screen
-                if (!isSkyGapAtScreenPx(x, y)) continue;
-                sunGlare.active = true;
-                sunGlare.start = flareTime;
-                sunGlare.dur = 0.35 + flareRng() * 0.45;
-                sunGlare.x = x;
-                sunGlare.y = y;
-                sunGlare.hue = 42 + 28 * flareRng(); // warm-ish
-                break;
-              }
-            }
-          }
-
-          if (!sunGlare.active) return;
-          // If clouds drift in front of it, stop drawing.
-          if (!isSkyGapAtScreenPx(sunGlare.x, sunGlare.y)) {
-            sunGlare.active = false;
-            return;
-          }
-          const t = (flareTime - sunGlare.start) / Math.max(1e-4, sunGlare.dur);
-          if (t >= 1) {
-            sunGlare.active = false;
-            return;
-          }
-
-          const ease = t < 0.5 ? (t * 2) : (2 - t * 2);
-          const a = 0.38 * ease;
-          const cx = sunGlare.x;
-          const cy = sunGlare.y;
-          const r = 18 + 54 * ease;
-
-          // Clip to sky so glare never draws onto the ground.
-          const hy = horizonYPx();
-          flareCtx.save();
-          flareCtx.beginPath();
-          flareCtx.rect(0, 0, w, Math.max(0, Math.min(h, hy)));
-          flareCtx.clip();
-          flareCtx.globalCompositeOperation = "screen";
-          flareCtx.filter = "blur(6px) saturate(1.4)";
-          // Soft disk.
-          let g = flareCtx.createRadialGradient(cx, cy, 0, cx, cy, r);
-          g.addColorStop(0, "hsla(" + sunGlare.hue + ",100%,85%," + (a * 0.85) + ")");
-          g.addColorStop(0.25, "hsla(" + (sunGlare.hue + 20) + ",100%,80%," + (a * 0.35) + ")");
-          g.addColorStop(1, "rgba(255,255,255,0)");
-          flareCtx.fillStyle = g;
-          flareCtx.beginPath();
-          flareCtx.arc(cx, cy, r, 0, Math.PI * 2);
-          flareCtx.fill();
-
-          // A couple of streaks.
-          flareCtx.filter = "blur(4px) saturate(1.5)";
-          flareCtx.strokeStyle = "rgba(255,255,255," + (a * 0.65) + ")";
-          flareCtx.lineWidth = 4;
-          flareCtx.beginPath();
-          flareCtx.moveTo(cx - r * 1.3, cy);
-          flareCtx.lineTo(cx + r * 1.3, cy);
-          flareCtx.stroke();
-          flareCtx.beginPath();
-          flareCtx.moveTo(cx, cy - r * 0.9);
-          flareCtx.lineTo(cx, cy + r * 0.9);
-          flareCtx.stroke();
-
-          flareCtx.restore();
-        }
 
         const keys = new Set();
         let bassNoteSeq = 0;
@@ -6506,7 +5985,6 @@
           pushPlayerTrail(dt);
           updatePlayerShadow();
           updateCamera(dt);
-          updateLensFlare();
           updateCharacterBillboard();
           updatePlayerHands(dt);
           npcSpawnTimer += dt;
@@ -6519,10 +5997,9 @@
           updatePropPhysics("ball", dt);
           resolveBallCubeCollision();
           updatePondTint(dt);
-          // Ensure stencil starts clean each frame.
-          renderer.clearStencil();
+        // Ensure stencil starts clean each frame.
+        renderer.clearStencil();
           renderer.render(scene, camera);
-          renderBloom();
           requestAnimationFrame(animate);
         }
         animate();
@@ -6549,8 +6026,6 @@
           camera.aspect = innerWidth / innerHeight;
           camera.updateProjectionMatrix();
           renderer.setSize(innerWidth, innerHeight);
-          resizeFlare();
-          bloomW = 0;
         });
       }
     })();

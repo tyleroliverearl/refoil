@@ -10,7 +10,8 @@
   [headers.values]
     Cache-Control = "public, max-age=86400"
 
+# Always fetch fresh HTML so shader/renderer fixes show up immediately after deploy.
 [[headers]]
-  for = "index.html"
+  for = "*.html"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
