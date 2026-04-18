@@ -269,6 +269,26 @@
       margin: 0 0 8px;
     }
     #hud .hud-toggles label { cursor: pointer; user-select: none; white-space: nowrap; }
+    /** Labelless map switcher; fill is set in JS (random each time the HUD is opened). */
+    #hud .hud-map-cycle {
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      margin-left: 18px;
+      border-radius: 50%;
+      border: 1px solid rgba(0, 0, 0, 0.28);
+      box-sizing: border-box;
+      flex-shrink: 0;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: transform 0.12s ease, filter 0.12s ease;
+    }
+    #hud .hud-map-cycle:hover {
+      filter: brightness(1.08);
+    }
+    #hud .hud-map-cycle:active {
+      transform: scale(0.92);
+    }
     #hud[data-collapsed="true"] .hud-tabs { display: none; }
     #hud[data-collapsed="true"] .hud-toggles { display: none; }
     #hud[data-collapsed="true"] .hud-panel { display: none !important; }
@@ -345,6 +365,7 @@
       </label>
       <label><input type="checkbox" id="hud-prop-cube" /> Cube</label>
       <label><input type="checkbox" id="hud-prop-ball" /> Ball</label>
+      <button type="button" class="hud-map-cycle" id="hud-map-cycle" aria-label="Switch world map"></button>
     </div>
     <div class="hud-panel" data-hud-panel="touch" role="tabpanel" hidden>
       <table class="hud-table">
@@ -455,12 +476,18 @@
         const btn = document.getElementById("hud-toggle");
         if (!btn) return;
         function applyCollapsed(collapsed) {
+          const wasCollapsed = hud.getAttribute("data-collapsed") === "true";
           hud.setAttribute("data-collapsed", collapsed ? "true" : "false");
           btn.textContent = collapsed ? ":)" : "x";
           btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
           try {
             localStorage.setItem("hudCollapsed", collapsed ? "1" : "0");
           } catch (e) {}
+          if (wasCollapsed && !collapsed) {
+            try {
+              hud.dispatchEvent(new CustomEvent("hud-opened"));
+            } catch (evErr) {}
+          }
         }
         let collapsed = false;
         try {
@@ -573,27 +600,41 @@
         });
 
       function initGame() {
+        const LS_MAP_MODE = "worldTilesMapMode";
+        /** HUD cycle order; extend alongside readMapMode() and world init when adding maps. */
+        const MAP_MODE_IDS = ["island", "board", "tesseract"];
+        function readMapMode() {
+          try {
+            const q = new URLSearchParams(String(location.search || ""));
+            const u = q.get("map");
+            if (MAP_MODE_IDS.indexOf(u) >= 0) return u;
+          } catch (e) {}
+          try {
+            const ls = localStorage.getItem(LS_MAP_MODE);
+            if (MAP_MODE_IDS.indexOf(ls) >= 0) return ls;
+          } catch (e2) {}
+          return MAP_MODE_IDS[0];
+        }
+        const mapMode = readMapMode();
+        const useBoardMap = mapMode === "board";
+        const useTesseractMap = mapMode === "tesseract";
+        const isIslandMap = mapMode === "island";
         try {
-          const _p = new URLSearchParams(window.location.search);
-          if (_p.has("resetWorld") || _p.has("clearWorld")) {
-            localStorage.removeItem("billboardWorldTilesV1");
-            _p.delete("resetWorld");
-            _p.delete("clearWorld");
-            const _q = _p.toString();
-            location.replace(window.location.pathname + (_q ? "?" + _q : "") + window.location.hash);
-            return;
-          }
-        } catch (e) {}
+          const q = new URLSearchParams(String(location.search || ""));
+          const u = q.get("map");
+          if (MAP_MODE_IDS.indexOf(u) >= 0) localStorage.setItem(LS_MAP_MODE, u);
+        } catch (eSync) {}
 
         let renderer;
         try {
           renderer = new THREE.WebGLRenderer({
             antialias: true,
-              stencil: true,
+            stencil: true,
             alpha: false,
             premultipliedAlpha: false,
             powerPreference: "high-performance",
-            failIfMajorPerformanceCaveat: false
+            failIfMajorPerformanceCaveat: false,
+            logarithmicDepthBuffer: false
           });
         } catch (e1) {
           try {
@@ -602,14 +643,16 @@
               stencil: true,
               alpha: false,
               premultipliedAlpha: false,
-              failIfMajorPerformanceCaveat: false
+              failIfMajorPerformanceCaveat: false,
+              logarithmicDepthBuffer: false
             });
           } catch (e2) {
             throw new Error("WebGLRenderer failed: " + (e2 && e2.message));
           }
         }
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 3));
+        // Island: heavier shaders + merged terrain — cap DPR a bit lower to keep frame time stable (helps Web Audio / looper).
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, useBoardMap ? 2 : useTesseractMap ? 1.7 : 1.55));
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.toneMapping = THREE.NoToneMapping;
         renderer.toneMappingExposure = 1;
@@ -625,6 +668,18 @@
 
         const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 2200);
         const clock = new THREE.Clock();
+        /** Set when ocean water shader replaces the basic sea material (see buildTileWorld). */
+        let oceanWaterMat = null;
+        /** Set in tesseract map mode. */
+        let tesseractGlassMat = null;
+        /** Rainbow dragon (tesseract map). */
+        let tesseractDragon = null;
+        /** Fractal glass field (tesseract map). */
+        let tesseractFractal = null;
+        const tesseractDragonTmp = {
+          obj: new THREE.Object3D(),
+          col: new THREE.Color()
+        };
 
         // Start aimed toward +X,+Z (tile continent center is near origin).
         let cameraDirIndex = 1;
@@ -819,74 +874,465 @@
         stars.frustumCulled = false;
         scene.add(stars);
 
-        /** Procedural tile continent (grass biome v1). Sky/clouds unchanged. */
-        const WORLD_TILES_STORAGE_KEY = "billboardWorldTilesV1";
-        const WORLD_TILES_FORMAT = 1;
-        const WORLD_SEED = (function readWorldSeed() {
-          try {
-            const s = new URLSearchParams(window.location.search).get("seed");
-            if (s != null && s.length) {
-              let h = 2166136261;
-              for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
-              return h >>> 0;
-            }
-          } catch (e) {}
-          return 0x91e7a3c1;
-        })();
-        const TILE_SIZE = 2.2;
-        const WORLD_GRID = 79;
-        const WORLD_HALF = (WORLD_GRID * TILE_SIZE) * 0.5;
-        const halfBoard = WORLD_HALF;
+        /** Island + checkerboard share the same nominal walkable floor height. */
+        const GROUND_SURFACE_Y = 0.015;
+        /** Shared with ocean mesh; swim surface matches the visible water sheet. */
+        const WATER_SURFACE_LIFT = 0.058;
+        const SWIM_WATER_SURFACE_Y = GROUND_SURFACE_Y + WATER_SURFACE_LIFT;
+        /** Island tile lookup; stub until island init assigns the real implementation. */
+        let worldBiomeAt = function (x, z) {
+          void x;
+          void z;
+          return 0;
+        };
 
-        function saveWorldTilesSnapshot(grid, seedUsed) {
-          try {
-            const payload = {
-              format: WORLD_TILES_FORMAT,
-              tileSize: TILE_SIZE,
-              worldGrid: WORLD_GRID,
-              seed: seedUsed >>> 0,
-              land: Array.from(grid)
-            };
-            localStorage.setItem(WORLD_TILES_STORAGE_KEY, JSON.stringify(payload));
-          } catch (e) {}
-        }
-        function loadWorldTilesSnapshot() {
-          try {
-            const raw = localStorage.getItem(WORLD_TILES_STORAGE_KEY);
-            if (!raw) return null;
-            const o = JSON.parse(raw);
-            if (o.format !== WORLD_TILES_FORMAT) return null;
-            if (o.tileSize !== TILE_SIZE || o.worldGrid !== WORLD_GRID) return null;
-            if (!Array.isArray(o.land) || o.land.length !== WORLD_GRID * WORLD_GRID) return null;
-            const land = new Uint8Array(o.land.length);
-            for (let i = 0; i < o.land.length; i++) land[i] = o.land[i] ? 1 : 0;
-            return { land: land, seed: o.seed >>> 0 };
-          } catch (e) {
-            return null;
-          }
-        }
+        const landSpawnList = [];
+        const groundPickables = [];
+        const shadowPickables = [];
+        let mapBoardHalfExtent = 70;
+        let tileWorldSpawn = { x: 0, z: 0 };
+        /** Island palm placeholder meshes (Y-billboards); updated each frame to face the camera. */
+        let islandPalmBillboards = [];
+        /** Set at end of island init; captures TILE_SIZE / WORLD_HALF_* / grid inside the island block. */
+        let islandTerrainHeightBilinearFn = null;
+
+        if (isIslandMap) {
         /**
-         * Refresh keeps the same island: snapshot is in localStorage (by design).
-         * New layout: ?new=1 or ?fresh=1 or ?seed=yourstring
-         * Clear saved map only: ?resetWorld=1 (then reloads with a fresh random map).
+         * Archipelago (2–5 islands): each is a circular patch with its own 2×2 grass core and BFS tiers
+         * (summit … beach … ocean). Same ±1 tier jitter, neighbor smoothing, and high-altitude median flats
+         * as before. Sea (23) fills gaps between islands. Spawn reference uses archipelago centroid.
          */
-        const worldLandInit = (function () {
-          try {
-            const params = new URLSearchParams(window.location.search);
-            const forceNew = params.has("new") || params.has("fresh");
-            const explicitSeed = params.has("seed");
-            if (!forceNew && !explicitSeed) {
-              const snap = loadWorldTilesSnapshot();
-              if (snap) {
-                return { grid: snap.land, seed: snap.seed, restored: true };
+        const TILE_SIZE = 2.2;
+        const ISLAND_GRID = 45;
+        const TILES_X = ISLAND_GRID;
+        const TILES_Z = ISLAND_GRID;
+        const WORLD_HALF_X = (TILES_X * TILE_SIZE) / 2;
+        const WORLD_HALF_Z = (TILES_Z * TILE_SIZE) / 2;
+        mapBoardHalfExtent = Math.max(WORLD_HALF_X, WORLD_HALF_Z);
+        const CENTER_IX = (TILES_X - 1) * 0.5;
+        const CENTER_IZ = (TILES_Z - 1) * 0.5;
+        const ISLAND_CX = (TILES_X - 1) >> 1;
+        const ISLAND_CZ = (TILES_Z - 1) >> 1;
+        /** Used for spawn / sorting toward “main” land after archipelago gen (centroid of island seeds). */
+        let archipelagoSpawnRefCx = ISLAND_CX;
+        let archipelagoSpawnRefCz = ISLAND_CZ;
+        /** Filled by island grid gen: `{ cx, cz, r }` per island (cell-space); used for props (e.g. palms). */
+        let archipelagoIslands = [];
+
+        /** Same as playerHalfHeight below: vertical half of character body. */
+        const PLAYER_BODY_HALF_H = 0.18 * CHARACTER_SCALE;
+        /**
+         * Vertical spacing between island rings (grass terraces, sand steps). Larger than body half for drama.
+         * Nominal surface Y (flat cell center, before corner blending):
+         *   Dry sand (1): GROUND_SURFACE_Y
+         *   +k grass (10+k): GROUND_SURFACE_Y + k * TERRAIN_LAYER_STEP
+         *   Shallow sand (-1): GROUND_SURFACE_Y - TERRAIN_LAYER_STEP
+         *   Deep sand tier d (−2−d): GROUND_SURFACE_Y − (2+d) * TERRAIN_LAYER_STEP
+         * Sea plane: GROUND_SURFACE_Y + WATER_SURFACE_LIFT
+         */
+        const TERRAIN_LAYER_STEP = PLAYER_BODY_HALF_H * 2.5;
+        const Y_SAND_SHALLOW = GROUND_SURFACE_Y - TERRAIN_LAYER_STEP;
+        function sandYDeepTier(tier) {
+          return GROUND_SURFACE_Y - (2 + tier) * TERRAIN_LAYER_STEP;
+        }
+
+        const GRASS_COLOR = 0x4db368;
+        const SAND_COLOR = 0xf4e8bc;
+        /** Infinite sea plane + tint (marine). */
+        const WATER_MARINE_COLOR = 0x4a9db8;
+
+        /**
+         * 0 empty, 1 base grass, 11–14 elevated (+1…+4), 2 shallow, 20–23 deep (−2…−5). index = ix + iz * TILES_X
+         */
+        const worldTileGrid = new Uint8Array(TILES_X * TILES_Z);
+        /** BFS layer L: tier = floor((L+1)/2), capped at 9 (−5 ocean). */
+        function islandTierFromLayer(L) {
+          return Math.min(9, Math.floor((L + 1) / 2));
+        }
+        function islandBiomeFromTier(t) {
+          if (t === 0) return 14;
+          if (t === 1) return 13;
+          if (t === 2) return 12;
+          if (t === 3) return 11;
+          if (t === 4) return 1;
+          if (t === 5) return 2;
+          return 14 + t;
+        }
+        (function fillArchipelagoIslandGrid() {
+          const MARGIN = 5;
+          const MIN_R = 5.85;
+          const MAX_R = 10.4;
+          const MIN_CENTER_GAP = 3.6;
+          const desiredIslands = 2 + Math.floor(Math.random() * 4);
+          const islands = [];
+
+          function diskFitsGrid(cx, cz, r) {
+            const pad = 1.5;
+            return (
+              cx - r >= -0.5 + pad &&
+              cx + r <= TILES_X - 0.5 - pad &&
+              cz - r >= -0.5 + pad &&
+              cz + r <= TILES_Z - 0.5 - pad
+            );
+          }
+          function overlapsExisting(cx, cz, r, arr) {
+            for (let u = 0; u < arr.length; u++) {
+              const o = arr[u];
+              if (Math.hypot(cx - o.cx, cz - o.cz) < r + o.r + MIN_CENTER_GAP) return true;
+            }
+            return false;
+          }
+          for (let attempt = 0; attempt < 520 && islands.length < desiredIslands; attempt++) {
+            const r = MIN_R + Math.random() * (MAX_R - MIN_R);
+            const cx = MARGIN + Math.random() * (TILES_X - 2 * MARGIN);
+            const cz = MARGIN + Math.random() * (TILES_Z - 2 * MARGIN);
+            if (!diskFitsGrid(cx, cz, r)) continue;
+            if (overlapsExisting(cx, cz, r, islands)) continue;
+            islands.push({ cx: cx, cz: cz, r: r });
+          }
+          if (islands.length < 2) {
+            islands.length = 0;
+            islands.push({ cx: ISLAND_CX - 9.5, cz: ISLAND_CZ - 2.2, r: 8.6 });
+            islands.push({ cx: ISLAND_CX + 9.5, cz: ISLAND_CZ + 2.2, r: 8.6 });
+          }
+
+          archipelagoIslands = islands.map(function (o) {
+            return { cx: o.cx, cz: o.cz, r: o.r };
+          });
+
+          let sumCx = 0;
+          let sumCz = 0;
+          for (let ai = 0; ai < islands.length; ai++) {
+            sumCx += islands[ai].cx;
+            sumCz += islands[ai].cz;
+          }
+          archipelagoSpawnRefCx = sumCx / islands.length;
+          archipelagoSpawnRefCz = sumCz / islands.length;
+
+          function cellOnIslandId(ix, iz) {
+            for (let ki = 0; ki < islands.length; ki++) {
+              const o = islands[ki];
+              if (Math.hypot(ix - o.cx, iz - o.cz) <= o.r) return ki;
+            }
+            return -1;
+          }
+
+          const bfs = new Int16Array(TILES_X * TILES_Z);
+          for (let i = 0; i < bfs.length; i++) bfs[i] = -1;
+          const coreDx = [-1, 0, -1, 0];
+          const coreDz = [-1, -1, 0, 0];
+          const nbs = [
+            [1, 0],
+            [-1, 0],
+            [0, 1],
+            [0, -1]
+          ];
+
+          for (let ik = 0; ik < islands.length; ik++) {
+            const o = islands[ik];
+            const cxi = Math.round(o.cx);
+            const czi = Math.round(o.cz);
+            const qix = [];
+            const qiz = [];
+            for (let ck = 0; ck < 4; ck++) {
+              const ix = cxi + coreDx[ck];
+              const iz = czi + coreDz[ck];
+              if (ix < 0 || ix >= TILES_X || iz < 0 || iz >= TILES_Z) continue;
+              if (cellOnIslandId(ix, iz) !== ik) continue;
+              const idx = ix + iz * TILES_X;
+              if (bfs[idx] !== -1) continue;
+              bfs[idx] = 0;
+              qix.push(ix);
+              qiz.push(iz);
+            }
+            for (let qi = 0; qi < qix.length; qi++) {
+              const ix = qix[qi];
+              const iz = qiz[qi];
+              const L = bfs[ix + iz * TILES_X];
+              for (let nb = 0; nb < 4; nb++) {
+                const nx = ix + nbs[nb][0];
+                const nz = iz + nbs[nb][1];
+                if (nx < 0 || nx >= TILES_X || nz < 0 || nz >= TILES_Z) continue;
+                const ni = nx + nz * TILES_X;
+                if (bfs[ni] !== -1) continue;
+                if (cellOnIslandId(nx, nz) !== ik) continue;
+                bfs[ni] = L + 1;
+                qix.push(nx);
+                qiz.push(nz);
               }
             }
-          } catch (e) {}
-          const g = generateContinentGrid(WORLD_SEED);
-          return { grid: g, seed: WORLD_SEED >>> 0, restored: false };
+          }
+
+          const islandAt = new Int8Array(TILES_X * TILES_Z);
+          for (let ii = 0; ii < islandAt.length; ii++) islandAt[ii] = -1;
+          for (let iz = 0; iz < TILES_Z; iz++) {
+            for (let ix = 0; ix < TILES_X; ix++) {
+              const i = ix + iz * TILES_X;
+              if (bfs[i] < 0) continue;
+              islandAt[i] = cellOnIslandId(ix, iz);
+            }
+          }
+
+          const islandGenSeed = (Math.random() * 0x7fffffff) | 0;
+          function islandHash01(ix, iz, salt) {
+            let h =
+              (Math.imul(ix, 92837111) ^
+                Math.imul(iz, 689287499) ^
+                Math.imul(salt + islandGenSeed, 283529017)) |
+              0;
+            h = Math.imul(h ^ (h >>> 15), h | 1);
+            h ^= h + Math.imul(h ^ (h >>> 7), h | 61);
+            return ((h >>> 0) % 1000000) / 1000000;
+          }
+          function smoothNoise01(ix, iz, s0) {
+            return (
+              islandHash01(ix, iz, s0) +
+              islandHash01(ix + 31, iz - 17, s0 + 11) +
+              islandHash01(ix - 19, iz + 47, s0 + 23)
+            ) / 3;
+          }
+          function clampTier(t) {
+            if (t < 0) return 0;
+            if (t > 9) return 9;
+            return t;
+          }
+          /** BFS-derived tier: 0 = summit … higher = lower elevation / deeper water (see islandBiomeFromTier). */
+          const tierBase = new Int8Array(TILES_X * TILES_Z);
+          for (let i = 0; i < tierBase.length; i++) {
+            tierBase[i] = bfs[i] < 0 ? -1 : islandTierFromLayer(bfs[i]);
+          }
+          const tier = new Int8Array(TILES_X * TILES_Z);
+          for (let iz = 0; iz < TILES_Z; iz++) {
+            for (let ix = 0; ix < TILES_X; ix++) {
+              const i = ix + iz * TILES_X;
+              if (bfs[i] < 0) continue;
+              const tb = tierBase[i];
+              const j = smoothNoise01(ix, iz, 1) - 0.5;
+              let delta = 0;
+              if (j < -0.28) delta = -1;
+              else if (j > 0.28) delta = 1;
+              if (smoothNoise01(ix, iz, 99) < 0.08) delta = 0;
+              let t = clampTier(tb + delta);
+              if (t < tb - 1) t = tb - 1;
+              if (t > tb + 1) t = tb + 1;
+              tier[i] = t;
+            }
+          }
+          const nbs4 = [
+            [1, 0],
+            [-1, 0],
+            [0, 1],
+            [0, -1]
+          ];
+          function neighborAvgTier(ix, iz, src) {
+            const i0 = ix + iz * TILES_X;
+            const id0 = islandAt[i0];
+            let s = src[i0];
+            let c = 1;
+            for (let nb = 0; nb < 4; nb++) {
+              const nx = ix + nbs4[nb][0];
+              const nz = iz + nbs4[nb][1];
+              if (nx < 0 || nx >= TILES_X || nz < 0 || nz >= TILES_Z) continue;
+              const ni = nx + nz * TILES_X;
+              if (bfs[ni] < 0) continue;
+              if (islandAt[ni] !== id0) continue;
+              s += src[ni];
+              c++;
+            }
+            return s / c;
+          }
+          const tierNext = new Int8Array(TILES_X * TILES_Z);
+          for (let pass = 0; pass < 5; pass++) {
+            for (let iz = 0; iz < TILES_Z; iz++) {
+              for (let ix = 0; ix < TILES_X; ix++) {
+                const i = ix + iz * TILES_X;
+                if (bfs[i] < 0) continue;
+                const tb = tierBase[i];
+                let t = Math.round(neighborAvgTier(ix, iz, tier));
+                if (t < tb - 1) t = tb - 1;
+                if (t > tb + 1) t = tb + 1;
+                tierNext[i] = clampTier(t);
+              }
+            }
+            for (let iz = 0; iz < TILES_Z; iz++) {
+              for (let ix = 0; ix < TILES_X; ix++) {
+                const i = ix + iz * TILES_X;
+                if (bfs[i] < 0) continue;
+                tier[i] = tierNext[i];
+              }
+            }
+          }
+          /** Small flat pads on upper hill (low tierBase = high altitude): median blend in 3×3. */
+          for (let pPlate = 0; pPlate < 3; pPlate++) {
+            for (let iz = 0; iz < TILES_Z; iz++) {
+              for (let ix = 0; ix < TILES_X; ix++) {
+                const i = ix + iz * TILES_X;
+                if (bfs[i] < 0) continue;
+                tierNext[i] = tier[i];
+              }
+            }
+            for (let iz = 0; iz < TILES_Z; iz++) {
+              for (let ix = 0; ix < TILES_X; ix++) {
+                const i = ix + iz * TILES_X;
+                if (bfs[i] < 0) continue;
+                const tb = tierBase[i];
+                if (tb > 3) continue;
+                const vals = [];
+                const id0 = islandAt[i];
+                for (let dz = -1; dz <= 1; dz++) {
+                  for (let dx = -1; dx <= 1; dx++) {
+                    const nx = ix + dx;
+                    const nz = iz + dz;
+                    if (nx < 0 || nx >= TILES_X || nz < 0 || nz >= TILES_Z) continue;
+                    const ni = nx + nz * TILES_X;
+                    if (bfs[ni] < 0) continue;
+                    if (islandAt[ni] !== id0) continue;
+                    vals.push(tier[ni]);
+                  }
+                }
+                if (vals.length < 5) continue;
+                vals.sort(function (a, b) {
+                  return a - b;
+                });
+                const med = vals[(vals.length - 1) >> 1];
+                let t = Math.round(tier[i] * 0.42 + med * 0.58);
+                if (t < tb - 1) t = tb - 1;
+                if (t > tb + 1) t = tb + 1;
+                tierNext[i] = clampTier(t);
+              }
+            }
+            for (let iz = 0; iz < TILES_Z; iz++) {
+              for (let ix = 0; ix < TILES_X; ix++) {
+                const i = ix + iz * TILES_X;
+                if (bfs[i] < 0) continue;
+                tier[i] = tierNext[i];
+              }
+            }
+          }
+
+          for (let iz = 0; iz < TILES_Z; iz++) {
+            for (let ix = 0; ix < TILES_X; ix++) {
+              const i = ix + iz * TILES_X;
+              if (bfs[i] < 0) {
+                worldTileGrid[i] = 23;
+              } else {
+                worldTileGrid[i] = islandBiomeFromTier(tier[i]);
+              }
+            }
+          }
+
+          /** Shallow / deep water biomes next to elevated grass skew vertex normals below the sea plane; keep a sand buffer. */
+          function isWaterTileBiome(b) {
+            return b === 2 || (b >= 20 && b <= 23);
+          }
+          function isElevatedGrassBiome(b) {
+            return b >= 11 && b <= 14;
+          }
+          const GRASS_WATER_BUFFER_R = 2;
+          function elevatedGrassNearWater(ix, iz) {
+            for (let dz = -GRASS_WATER_BUFFER_R; dz <= GRASS_WATER_BUFFER_R; dz++) {
+              for (let dx = -GRASS_WATER_BUFFER_R; dx <= GRASS_WATER_BUFFER_R; dx++) {
+                if (dx === 0 && dz === 0) continue;
+                const nx = ix + dx;
+                const nz = iz + dz;
+                if (nx < 0 || nx >= TILES_X || nz < 0 || nz >= TILES_Z) continue;
+                if (isWaterTileBiome(worldTileGrid[nx + nz * TILES_X])) return true;
+              }
+            }
+            return false;
+          }
+          for (let iz = 0; iz < TILES_Z; iz++) {
+            for (let ix = 0; ix < TILES_X; ix++) {
+              const i = ix + iz * TILES_X;
+              const b = worldTileGrid[i];
+              if (!isElevatedGrassBiome(b)) continue;
+              if (elevatedGrassNearWater(ix, iz)) {
+                worldTileGrid[i] = 1;
+              }
+            }
+          }
         })();
-        const worldLandGrid = worldLandInit.grid;
-        const WORLD_SEED_USED = worldLandInit.seed;
+        function grassSurfaceYFromBiome(b) {
+          if (b === 1) return GROUND_SURFACE_Y;
+          if (b >= 11 && b <= 14) return GROUND_SURFACE_Y + (b - 10) * TERRAIN_LAYER_STEP;
+          return GROUND_SURFACE_Y;
+        }
+        function deepOceanTierFromBiome(b) {
+          return b - 20;
+        }
+        function cellTile(ix, iz) {
+          if (ix < 0 || ix >= TILES_X || iz < 0 || iz >= TILES_Z) return 0;
+          return worldTileGrid[ix + iz * TILES_X];
+        }
+        function islandGrassAtCell(ix, iz) {
+          const c = cellTile(ix, iz);
+          /** 1 = dry sand (land); 11–14 = elevated grass terraces. */
+          return c === 1 || (c >= 11 && c <= 14);
+        }
+        function elevatedGrassAtCell(ix, iz) {
+          const c = cellTile(ix, iz);
+          return c >= 11 && c <= 14;
+        }
+        function shallowWaterAtCell(ix, iz) {
+          return cellTile(ix, iz) === 2;
+        }
+        function deepWaterAtCell(ix, iz) {
+          const c = cellTile(ix, iz);
+          return c >= 20 && c <= 23;
+        }
+
+        function tileDisplayNameForCell(ix, iz) {
+          const b = cellTile(ix, iz);
+          if (b === 1) return "Dry sand";
+          if (b >= 11 && b <= 14) return "+" + String(b - 10);
+          if (b === 2) return "-1";
+          if (b >= 20 && b <= 23) return String(-(b - 18));
+          return "?";
+        }
+
+        /** Walkable surface nominal Y (grass top or sand bed) for one cell. */
+        function nominalContactY(ix, iz) {
+          if (ix < 0 || ix >= TILES_X || iz < 0 || iz >= TILES_Z) {
+            return GROUND_SURFACE_Y;
+          }
+          const b = worldTileGrid[ix + iz * TILES_X];
+          if (islandGrassAtCell(ix, iz)) return grassSurfaceYFromBiome(b);
+          if (b === 2) return Y_SAND_SHALLOW;
+          if (b >= 20 && b <= 23) return sandYDeepTier(b - 20);
+          return GROUND_SURFACE_Y;
+        }
+
+        /**
+         * Corner (vx,vz) = SW of cell (vx,vz): average up to 4 touching cell nominals — O(1), no extra buffers.
+         */
+        function vertexContactY(vx, vz) {
+          let sum = 0;
+          let n = 0;
+          const pairs = [
+            [vx - 1, vz - 1],
+            [vx, vz - 1],
+            [vx - 1, vz],
+            [vx, vz]
+          ];
+          for (let pi = 0; pi < 4; pi++) {
+            const cx = pairs[pi][0];
+            const cz = pairs[pi][1];
+            if (cx >= 0 && cx < TILES_X && cz >= 0 && cz < TILES_Z) {
+              sum += nominalContactY(cx, cz);
+              n++;
+            }
+          }
+          return n ? sum / n : GROUND_SURFACE_Y;
+        }
+
+        function rampCornersForCell(ix, iz) {
+          return {
+            h_sw: vertexContactY(ix, iz),
+            h_se: vertexContactY(ix + 1, iz),
+            h_ne: vertexContactY(ix + 1, iz + 1),
+            h_nw: vertexContactY(ix, iz + 1)
+          };
+        }
 
         function fract2(x) {
           return x - Math.floor(x);
@@ -894,167 +1340,1803 @@
         function hashSeed2(ix, iz) {
           return fract2(Math.sin(ix * 127.1 + iz * 311.7) * 43758.5453123);
         }
-        function continentNoise(ix, iz) {
-          return (
-            hashSeed2(ix, iz) * 0.55 +
-            hashSeed2(ix >> 1, iz >> 1) * 0.3 +
-            hashSeed2(ix + 31, iz + 17) * 0.15
-          );
-        }
-        /**
-         * Single landmass: radial falloff + noise, then keep only the connected component through the map center.
-         * worldLandGrid[i] === 1 => grass tile (biome id 1). 0 => ocean (no walkable ground).
-         */
-        function generateContinentGrid(seed) {
-          const land = new Uint8Array(WORLD_GRID * WORLD_GRID);
-          const cx = (WORLD_GRID - 1) * 0.5;
-          const cz = (WORLD_GRID - 1) * 0.5;
-          const maxR = Math.hypot(cx, cz) + 0.001;
-          for (let iz = 0; iz < WORLD_GRID; iz++) {
-            for (let ix = 0; ix < WORLD_GRID; ix++) {
-              const nx = (ix - cx) / maxR;
-              const nz = (iz - cz) / maxR;
-              const d = Math.sqrt(nx * nx + nz * nz);
-              const falloff = Math.max(0, 1 - d * d);
-              const n = continentNoise(ix * 17 + seed, iz * 23 + seed) * 0.55 +
-                continentNoise(ix * 9 + 999, iz * 9 + 999) * 0.45;
-              const v = falloff * 0.95 + n * 0.35 - 0.48;
-              land[ix + iz * WORLD_GRID] = v > 0.28 ? 1 : 0;
-            }
-          }
-          const cix = Math.floor(WORLD_GRID / 2);
-          const ciz = Math.floor(WORLD_GRID / 2);
-          if (!land[cix + ciz * WORLD_GRID]) land[cix + ciz * WORLD_GRID] = 1;
-          const visited = new Uint8Array(WORLD_GRID * WORLD_GRID);
-          const q = [];
-          const start = cix + ciz * WORLD_GRID;
-          if (land[start]) {
-            q.push(start);
-            visited[start] = 1;
-          }
-          let qi = 0;
-          while (qi < q.length) {
-            const cur = q[qi++];
-            const x = cur % WORLD_GRID;
-            const z = (cur / WORLD_GRID) | 0;
-            for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-              const nx = x + dx;
-              const nz = z + dz;
-              if (nx < 0 || nx >= WORLD_GRID || nz < 0 || nz >= WORLD_GRID) continue;
-              const ni = nx + nz * WORLD_GRID;
-              if (!land[ni] || visited[ni]) continue;
-              visited[ni] = 1;
-              q.push(ni);
-            }
-          }
-          for (let i = 0; i < land.length; i++) {
-            land[i] = land[i] && visited[i] ? 1 : 0;
-          }
-          return land;
-        }
+
         function worldXZFromCell(ix, iz) {
           return {
-            x: (ix + 0.5) * TILE_SIZE - WORLD_HALF,
-            z: (iz + 0.5) * TILE_SIZE - WORLD_HALF
+            x: (ix + 0.5) * TILE_SIZE - WORLD_HALF_X,
+            z: (iz + 0.5) * TILE_SIZE - WORLD_HALF_Z
           };
         }
-        /** Future biomes: 0 none, 1 grass, … */
-        function worldBiomeAt(x, z) {
-          const ix = Math.floor((x + WORLD_HALF) / TILE_SIZE);
-          const iz = Math.floor((z + WORLD_HALF) / TILE_SIZE);
-          if (ix < 0 || ix >= WORLD_GRID || iz < 0 || iz >= WORLD_GRID) return 0;
-          return worldLandGrid[ix + iz * WORLD_GRID] ? 1 : 0;
+
+        /** Tile id at world XZ: grass 1/11–14, shallow 2, deep 20–23, 0 outside. */
+        worldBiomeAt = function (x, z) {
+          const ix = Math.floor((x + WORLD_HALF_X) / TILE_SIZE);
+          const iz = Math.floor((z + WORLD_HALF_Z) / TILE_SIZE);
+          if (ix < 0 || ix >= TILES_X || iz < 0 || iz >= TILES_Z) return 0;
+          return worldTileGrid[ix + iz * TILES_X];
+        };
+
+        function pushTileQuad(pos, idx, cx, cz, y) {
+          const hw = TILE_SIZE * 0.5;
+          const x0 = cx - hw;
+          const x1 = cx + hw;
+          const z0 = cz - hw;
+          const z1 = cz + hw;
+          const b = (pos.length / 3) | 0;
+          pos.push(x0, y, z0, x1, y, z0, x1, y, z1, x0, y, z1);
+          idx.push(b, b + 2, b + 1, b, b + 3, b + 2);
         }
 
-        const landSpawnList = [];
-        const groundPickables = [];
-        const shadowPickables = [];
+        /** Sloped tile quad: verts SW, SE, NE, NW. Single SW–NE split; consistent winding for FrontSide. */
+        function pushSlopedTileQuad(pos, idx, cx, cz, h_sw, h_se, h_ne, h_nw) {
+          const hw = TILE_SIZE * 0.5;
+          const x0 = cx - hw;
+          const x1 = cx + hw;
+          const z0 = cz - hw;
+          const z1 = cz + hw;
+          const b = (pos.length / 3) | 0;
+          pos.push(x0, h_sw, z0, x1, h_se, z0, x1, h_ne, z1, x0, h_nw, z1);
+          idx.push(b, b + 2, b + 1, b, b + 3, b + 2);
+        }
 
-        const tileWorldSpawn = (function buildTileContinent() {
-          let count = 0;
-          for (let i = 0; i < worldLandGrid.length; i++) {
-            if (worldLandGrid[i]) count++;
+        tileWorldSpawn = (function buildTileWorld() {
+          const gw = TILES_X + 1;
+          const gh = TILES_Z + 1;
+          const gridVerts = gw * gh;
+          const gridPos = new Float32Array(gridVerts * 3);
+          const grassW = new Float32Array(gridVerts);
+          const cornerGrassAny = new Uint8Array(gridVerts);
+          let pi = 0;
+          for (let vz = 0; vz < gh; vz++) {
+            for (let vx = 0; vx < gw; vx++) {
+              const x = vx * TILE_SIZE - WORLD_HALF_X;
+              const z = vz * TILE_SIZE - WORLD_HALF_Z;
+              const y = vertexContactY(vx, vz);
+              gridPos[pi] = x;
+              gridPos[pi + 1] = y;
+              gridPos[pi + 2] = z;
+              let eg = 0;
+              let tot = 0;
+              const offs = [
+                [-1, -1],
+                [0, -1],
+                [-1, 0],
+                [0, 0]
+              ];
+              for (let oi = 0; oi < 4; oi++) {
+                const cx = vx + offs[oi][0];
+                const cz = vz + offs[oi][1];
+                if (cx >= 0 && cx < TILES_X && cz >= 0 && cz < TILES_Z) {
+                  tot++;
+                  if (elevatedGrassAtCell(cx, cz)) eg++;
+                }
+              }
+              const vi = vx + vz * gw;
+              grassW[vi] = tot ? eg / tot : 0;
+              cornerGrassAny[vi] = eg > 0 ? 1 : 0;
+              pi += 3;
+            }
           }
-          let sx = 0;
-          let sz = 0;
-          if (count > 0) {
-            const geom = new THREE.PlaneGeometry(TILE_SIZE * 0.98, TILE_SIZE * 0.98);
-            const mat = new THREE.MeshBasicMaterial({
-              color: 0x4db368,
-              side: THREE.DoubleSide,
-              toneMapped: false
+
+          /**
+           * Land vs shallow/deep water marching: bits SW,SE,NE,NW = 1,2,4,8.
+           * Corner is "inside land" only if **all four** incident cells are topside land (dry sand or grass).
+           * If we used "any" land, every corner of every dry-sand tile still touched that sand cell → lwState
+           * was always 15 on beaches, so land–water marching never ran and the coast stayed square.
+           */
+          const cornerLand = new Uint8Array(gridVerts);
+          for (let vz = 0; vz < gh; vz++) {
+            for (let vx = 0; vx < gw; vx++) {
+              let land = 1;
+              const pairs = [
+                [vx - 1, vz - 1],
+                [vx, vz - 1],
+                [vx - 1, vz],
+                [vx, vz]
+              ];
+              for (let pi = 0; pi < 4; pi++) {
+                const cx = pairs[pi][0];
+                const cz = pairs[pi][1];
+                if (
+                  cx < 0 ||
+                  cx >= TILES_X ||
+                  cz < 0 ||
+                  cz >= TILES_Z ||
+                  !islandGrassAtCell(cx, cz)
+                ) {
+                  land = 0;
+                  break;
+                }
+              }
+              cornerLand[vx + vz * gw] = land;
+            }
+          }
+
+          function gridVi(vx, vz) {
+            return vx + vz * gw;
+          }
+
+          function elevatedGrassMaskAtCorner(vx, vz) {
+            return cornerGrassAny[vx + vz * gw] !== 0;
+          }
+
+          /**
+           * Marching squares on a shared vertex grid. Bits: SW,SE,NE,NW = 1,2,4,8.
+           * Winding must match `pushSlopedTileQuad` (SW–NE split): [i0,i2,i1] + [i0,i3,i2].
+           * The alternate SW–NE order [i0,i1,i2] + [i0,i2,i3] is the same two triangles but **back-face
+           * for upward ground**, so FrontSide culling made whole tiles vanish along mixed boundaries.
+           * SE–NW split uses flipped indices so both tris face +Y like the original quad.
+           */
+          function marchingGrassTris(state, ix, iz, i0, i1, i2, i3) {
+            const diagSWNE = [i0, i2, i1, i0, i3, i2];
+            const diagSENW = [i0, i3, i1, i1, i3, i2];
+            const mu =
+              (grassW[ix + iz * gw] +
+                grassW[ix + 1 + iz * gw] +
+                grassW[ix + 1 + (iz + 1) * gw] +
+                grassW[ix + (iz + 1) * gw]) *
+              0.25;
+            switch (state) {
+              case 0:
+              case 15: {
+                /** Checkerboard diagonals so long runs of uniform cells (ocean lwState 0 / interior sand 15) do not share one diagonal orientation with neighbors — avoids a stair-step / directional seam at the coast. */
+                const pq = ((ix + iz) & 1) === 0;
+                return pq ? diagSWNE : diagSENW;
+              }
+              case 1:
+              case 8:
+                return diagSENW;
+              case 2:
+              case 3:
+              case 4:
+              case 6:
+              case 7:
+              case 12:
+                return diagSWNE;
+              case 9:
+              case 11:
+              case 13:
+              case 14:
+                return diagSENW;
+              case 5:
+                return mu >= 0.5 ? diagSWNE : diagSENW;
+              case 10:
+                return mu < 0.5 ? diagSWNE : diagSENW;
+              default:
+                return diagSWNE;
+            }
+          }
+
+          /** Same topology table as grass MS; "inside" = land (dry sand or grass). Saddle 5/10: parity so neighbors agree (no cracks). */
+          function marchingLandWaterTris(lwState, ix, iz, i0, i1, i2, i3) {
+            const diagSWNE = [i0, i2, i1, i0, i3, i2];
+            const diagSENW = [i0, i3, i1, i1, i3, i2];
+            const p = ((ix + iz) & 1) === 0;
+            switch (lwState) {
+              case 0:
+              case 15:
+                return diagSWNE;
+              case 1:
+              case 8:
+                return diagSENW;
+              case 2:
+              case 3:
+              case 4:
+              case 6:
+              case 7:
+              case 12:
+                return diagSWNE;
+              case 9:
+              case 11:
+              case 13:
+              case 14:
+                return diagSENW;
+              case 5:
+                return p ? diagSWNE : diagSENW;
+              case 10:
+                return p ? diagSENW : diagSWNE;
+              default:
+                return diagSWNE;
+            }
+          }
+
+          /** Debug: coast triangulation vs world half — see session 265487 */
+          const shoreDbg = {
+            negX_grassFull: 0,
+            negX_lwMs: 0,
+            posX_grassFull: 0,
+            posX_lwMs: 0,
+            ixLow_grassFull: 0,
+            ixLow_lwMs: 0,
+            ixHigh_grassFull: 0,
+            ixHigh_lwMs: 0,
+            /** Count shoreline segments by direction for LAND cells bordering WATER. */
+            landEdgeW: 0,
+            landEdgeE: 0,
+            landEdgeN: 0,
+            landEdgeS: 0,
+            samples: []
+          };
+          function cellTouchesCoastShoreline(ix, iz) {
+            const b = cellTile(ix, iz);
+            const hereLand = b === 1 || (b >= 11 && b <= 14);
+            const hereWater = b === 2 || (b >= 20 && b <= 23);
+            if (!hereLand && !hereWater) return false;
+            const dirs = [
+              [1, 0],
+              [-1, 0],
+              [0, 1],
+              [0, -1]
+            ];
+            let seenLand = false;
+            let seenWater = false;
+            for (let di = 0; di < 4; di++) {
+              const nx = ix + dirs[di][0];
+              const nz = iz + dirs[di][1];
+              const bb = cellTile(nx, nz);
+              if (bb === 1 || (bb >= 11 && bb <= 14)) seenLand = true;
+              if (bb === 2 || (bb >= 20 && bb <= 23)) seenWater = true;
+            }
+            if (hereLand && seenWater) return true;
+            if (hereWater && seenLand) return true;
+            return false;
+          }
+
+          const idx = [];
+          for (let iz = 0; iz < TILES_Z; iz++) {
+            for (let ix = 0; ix < TILES_X; ix++) {
+              const cellB = cellTile(ix, iz);
+              let terrainKind = null;
+              if (cellB === 1) terrainKind = "drySand";
+              else if (elevatedGrassAtCell(ix, iz)) terrainKind = "grass";
+              else if (shallowWaterAtCell(ix, iz)) terrainKind = "shallow";
+              else if (deepWaterAtCell(ix, iz)) terrainKind = "deep";
+              if (!terrainKind) continue;
+
+              const p = worldXZFromCell(ix, iz);
+              landSpawnList.push({ x: p.x, z: p.z, kind: terrainKind, ix: ix, iz: iz, b: cellB });
+
+              const g0 = elevatedGrassMaskAtCorner(ix, iz) ? 1 : 0;
+              const g1 = elevatedGrassMaskAtCorner(ix + 1, iz) ? 1 : 0;
+              const g2 = elevatedGrassMaskAtCorner(ix + 1, iz + 1) ? 1 : 0;
+              const g3 = elevatedGrassMaskAtCorner(ix, iz + 1) ? 1 : 0;
+              const state = g0 | (g1 << 1) | (g2 << 2) | (g3 << 3);
+              const i0 = gridVi(ix, iz);
+              const i1 = gridVi(ix + 1, iz);
+              const i2 = gridVi(ix + 1, iz + 1);
+              const i3 = gridVi(ix, iz + 1);
+              const l0 = cornerLand[i0];
+              const l1 = cornerLand[i1];
+              const l2 = cornerLand[i2];
+              const l3 = cornerLand[i3];
+              const lwState = l0 | (l1 << 1) | (l2 << 2) | (l3 << 3);
+              const usedGrassOnly = lwState === 0 || lwState === 15;
+              if (cellTouchesCoastShoreline(ix, iz)) {
+                if (cellB === 1 || (cellB >= 11 && cellB <= 14)) {
+                  const bW = cellTile(ix - 1, iz);
+                  const bE = cellTile(ix + 1, iz);
+                  const bS = cellTile(ix, iz - 1);
+                  const bN = cellTile(ix, iz + 1);
+                  if (bW === 2 || (bW >= 20 && bW <= 23)) shoreDbg.landEdgeW++;
+                  if (bE === 2 || (bE >= 20 && bE <= 23)) shoreDbg.landEdgeE++;
+                  if (bN === 2 || (bN >= 20 && bN <= 23)) shoreDbg.landEdgeN++;
+                  if (bS === 2 || (bS >= 20 && bS <= 23)) shoreDbg.landEdgeS++;
+                }
+                const wxCell = (ix + 0.5) * TILE_SIZE - WORLD_HALF_X;
+                const negX = wxCell < 0;
+                const ixLow = ix < TILES_X * 0.5;
+                if (usedGrassOnly) {
+                  if (negX) shoreDbg.negX_grassFull++;
+                  else shoreDbg.posX_grassFull++;
+                  if (ixLow) shoreDbg.ixLow_grassFull++;
+                  else shoreDbg.ixHigh_grassFull++;
+                } else {
+                  if (negX) shoreDbg.negX_lwMs++;
+                  else shoreDbg.posX_lwMs++;
+                  if (ixLow) shoreDbg.ixLow_lwMs++;
+                  else shoreDbg.ixHigh_lwMs++;
+                }
+                if (shoreDbg.samples.length < 56) {
+                  shoreDbg.samples.push({
+                    ix,
+                    iz,
+                    lwState,
+                    l0,
+                    l1,
+                    l2,
+                    l3,
+                    usedGrassOnly,
+                    negX,
+                    ixLow,
+                    terrainKind
+                  });
+                }
+              }
+              const tris =
+                lwState === 0 || lwState === 15
+                  ? marchingGrassTris(state, ix, iz, i0, i1, i2, i3)
+                  : marchingLandWaterTris(lwState, ix, iz, i0, i1, i2, i3);
+              for (let ti = 0; ti < tris.length; ti++) idx.push(tris[ti]);
+            }
+          }
+          // #region agent log
+          fetch("http://127.0.0.1:7866/ingest/0436cf02-d141-45f1-871d-6362a9532842", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "265487" },
+            body: JSON.stringify({
+              sessionId: "265487",
+              hypothesisId: "H1-H5",
+              location: "world-tiles.html:buildTileWorld:shoreMs",
+              message: "coast marching: grassFull vs landWater by hemisphere",
+              data: shoreDbg,
+              timestamp: Date.now(),
+              runId: "pre-fix"
+            })
+          }).catch(function () {});
+          // #endregion
+
+          function makeIslandTerrainUnifiedMesh() {
+            if (!idx.length) return null;
+            const g = new THREE.BufferGeometry();
+            g.setAttribute("position", new THREE.BufferAttribute(gridPos, 3));
+            g.setAttribute("aGrass", new THREE.BufferAttribute(grassW, 1));
+            g.setIndex(idx);
+            g.computeVertexNormals();
+            g.computeBoundingSphere();
+            const gCol = new THREE.Color(GRASS_COLOR);
+            const sCol = new THREE.Color(SAND_COLOR);
+            const marine = new THREE.Color(WATER_MARINE_COLOR);
+            const mat = new THREE.ShaderMaterial({
+              uniforms: {
+                uGrassColor: { value: new THREE.Vector3(gCol.r, gCol.g, gCol.b) },
+                uSandColor: { value: new THREE.Vector3(sCol.r, sCol.g, sCol.b) },
+                uMarine: { value: new THREE.Vector3(marine.r, marine.g, marine.b) },
+                uWaterY: { value: SWIM_WATER_SURFACE_Y },
+                uAbsorb: { value: 1.22 }
+              },
+              vertexShader:
+                "attribute float aGrass;\n" +
+                "varying float vGrass;\n" +
+                "varying vec3 vWp;\n" +
+                "void main() {\n" +
+                "  vGrass = aGrass;\n" +
+                "  vec4 wp = modelMatrix * vec4(position, 1.0);\n" +
+                "  vWp = wp.xyz;\n" +
+                "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);\n" +
+                "}\n",
+              fragmentShader:
+                "uniform vec3 uGrassColor;\n" +
+                "uniform vec3 uSandColor;\n" +
+                "uniform vec3 uMarine;\n" +
+                "uniform float uWaterY;\n" +
+                "uniform float uAbsorb;\n" +
+                "varying float vGrass;\n" +
+                "varying vec3 vWp;\n" +
+                "void main() {\n" +
+                "  float g = smoothstep(0.38, 0.62, vGrass);\n" +
+                "  vec3 base = mix(uSandColor, uGrassColor, g);\n" +
+                "  float depth = max(0.0, uWaterY - vWp.y);\n" +
+                "  float tintAmt = 1.0 - exp(-depth * uAbsorb);\n" +
+                "  tintAmt = clamp(tintAmt * 0.74, 0.0, 1.0);\n" +
+                "  vec3 col = mix(base, uMarine, tintAmt);\n" +
+                "  gl_FragColor = vec4(col, 1.0);\n" +
+                "}\n",
+              side: THREE.FrontSide,
+              toneMapped: false,
+              depthWrite: true,
+              depthTest: true
             });
-            const inst = new THREE.InstancedMesh(geom, mat, count);
-            const dummy = new THREE.Object3D();
-            let ii = 0;
-            for (let iz = 0; iz < WORLD_GRID; iz++) {
-              for (let ix = 0; ix < WORLD_GRID; ix++) {
-                if (!worldLandGrid[ix + iz * WORLD_GRID]) continue;
-                const p = worldXZFromCell(ix, iz);
-                dummy.position.set(p.x, 0.015, p.z);
-                dummy.rotation.x = -Math.PI / 2;
-                dummy.updateMatrix();
-                inst.setMatrixAt(ii, dummy.matrix);
-                landSpawnList.push({ x: p.x, z: p.z });
-                ii++;
+            const mesh = new THREE.Mesh(g, mat);
+            mesh.renderOrder = 0;
+            mesh.frustumCulled = false;
+            return mesh;
+          }
+
+          const islandTerrainMesh = makeIslandTerrainUnifiedMesh();
+          if (islandTerrainMesh) {
+            islandTerrainMesh.userData.tileKey = "island_terrain";
+            islandTerrainMesh.userData.solid = true;
+            scene.add(islandTerrainMesh);
+            groundPickables.push(islandTerrainMesh);
+            shadowPickables.push(islandTerrainMesh);
+          }
+
+          /** One huge horizontal sea so underwater sand reads through; extends past the horizon. */
+          const SEA_SURFACE_Y = GROUND_SURFACE_Y + WATER_SURFACE_LIFT;
+          const oceanExtent = Math.max(24000, mapBoardHalfExtent * 200);
+          /** Tesselate so grazing-angle depth is stable (2 giant tris shimmer against the shore). */
+          const oceanSegs = 34;
+          const oceanGeo = new THREE.PlaneGeometry(oceanExtent, oceanExtent, oceanSegs, oceanSegs);
+          /** World units per seamless tile repeat on the sea plane (UV tiling). */
+          const waterTileWorldSpan = 10.5;
+          const oceanMat = new THREE.MeshBasicMaterial({
+            color: WATER_MARINE_COLOR,
+            transparent: true,
+            opacity: 0.46,
+            depthWrite: false,
+            depthTest: true,
+            side: THREE.DoubleSide,
+            toneMapped: false
+          });
+          const oceanPlane = new THREE.Mesh(oceanGeo, oceanMat);
+          oceanPlane.rotation.x = -Math.PI / 2;
+          oceanPlane.position.set(0, SEA_SURFACE_Y, 0);
+          oceanPlane.userData.tileKey = "water_ocean_plane";
+          oceanPlane.userData.tileId = 2;
+          oceanPlane.userData.solid = false;
+          oceanPlane.renderOrder = 12;
+          oceanPlane.frustumCulled = false;
+          scene.add(oceanPlane);
+          (function loadOceanWaterTileTexture() {
+            const tl = new THREE.TextureLoader();
+            tl.load(
+              new URL("assets/y2k-water-tile.png", window.location.href).href,
+              function (tex) {
+                function makeLandMaskTextures() {
+                  const maskRes = 512;
+                  /** Local cell corners: 0=SW,1=SE,2=NE,3=NW — must match marchingLandWaterTris / gridVi. */
+                  const LX = [0, 1, 1, 0];
+                  const LZ = [0, 0, 1, 1];
+                  function getLandWaterTriCornerIds(lwState, ix, iz) {
+                    const diagSWNE = [0, 2, 1, 0, 3, 2];
+                    const diagSENW = [0, 3, 1, 1, 3, 2];
+                    const p = ((ix + iz) & 1) === 0;
+                    switch (lwState) {
+                      case 0:
+                      case 15:
+                        return diagSWNE;
+                      case 1:
+                      case 8:
+                        return diagSENW;
+                      case 2:
+                      case 3:
+                      case 4:
+                      case 6:
+                      case 7:
+                      case 12:
+                        return diagSWNE;
+                      case 9:
+                      case 11:
+                      case 13:
+                      case 14:
+                        return diagSENW;
+                      case 5:
+                        return p ? diagSWNE : diagSENW;
+                      case 10:
+                        return p ? diagSENW : diagSWNE;
+                      default:
+                        return diagSWNE;
+                    }
+                  }
+                  function pointInTri2(px, pz, ax, az, bx, bz, cx, cz) {
+                    const v0x = bx - ax;
+                    const v0z = bz - az;
+                    const v1x = cx - ax;
+                    const v1z = cz - az;
+                    const v2x = px - ax;
+                    const v2z = pz - az;
+                    const d00 = v0x * v0x + v0z * v0z;
+                    const d01 = v0x * v1x + v0z * v1z;
+                    const d11 = v1x * v1x + v1z * v1z;
+                    const d20 = v2x * v0x + v2z * v0z;
+                    const d21 = v2x * v1x + v2z * v1z;
+                    const denom = d00 * d11 - d01 * d01;
+                    if (Math.abs(denom) < 1e-12) return false;
+                    const inv = 1 / denom;
+                    const v = (d11 * d20 - d01 * d21) * inv;
+                    const w = (d00 * d21 - d01 * d20) * inv;
+                    const u = 1 - v - w;
+                    return u >= -1e-5 && v >= -1e-5 && w >= -1e-5;
+                  }
+                  function landInterpInTri(px, pz, a, b, c, lvals) {
+                    const ax = LX[a];
+                    const az = LZ[a];
+                    const bx = LX[b];
+                    const bz = LZ[b];
+                    const cx = LX[c];
+                    const cz = LZ[c];
+                    const v0x = bx - ax;
+                    const v0z = bz - az;
+                    const v1x = cx - ax;
+                    const v1z = cz - az;
+                    const v2x = px - ax;
+                    const v2z = pz - az;
+                    const d00 = v0x * v0x + v0z * v0z;
+                    const d01 = v0x * v1x + v0z * v1z;
+                    const d11 = v1x * v1x + v1z * v1z;
+                    const d20 = v2x * v0x + v2z * v0z;
+                    const d21 = v2x * v1x + v2z * v1z;
+                    const denom = d00 * d11 - d01 * d01;
+                    if (Math.abs(denom) < 1e-12) return 0;
+                    const inv = 1 / denom;
+                    const v = (d11 * d20 - d01 * d21) * inv;
+                    const w = (d00 * d21 - d01 * d20) * inv;
+                    const u = 1 - v - w;
+                    return u * lvals[a] + v * lvals[b] + w * lvals[c];
+                  }
+                  /** Same "inside land" classification as island terrain marching squares (cornerLand + lw tris). */
+                  function landMaskHardAtWorld(x, z) {
+                    const fx = (x + WORLD_HALF_X) / TILE_SIZE;
+                    const fz = (z + WORLD_HALF_Z) / TILE_SIZE;
+                    const ix = Math.floor(fx);
+                    const iz = Math.floor(fz);
+                    if (ix < 0 || ix >= TILES_X || iz < 0 || iz >= TILES_Z) return 0;
+                    const fxc = fx - ix;
+                    const fzc = fz - iz;
+                    const i0 = ix + iz * gw;
+                    const i1 = ix + 1 + iz * gw;
+                    const i2 = ix + 1 + (iz + 1) * gw;
+                    const i3 = ix + (iz + 1) * gw;
+                    const l0 = cornerLand[i0] ? 1 : 0;
+                    const l1 = cornerLand[i1] ? 1 : 0;
+                    const l2 = cornerLand[i2] ? 1 : 0;
+                    const l3 = cornerLand[i3] ? 1 : 0;
+                    const lvals = [l0, l1, l2, l3];
+                    const lwState = l0 | (l1 << 1) | (l2 << 2) | (l3 << 3);
+                    // All corners "non-land" but cell can still be dry sand / grass (e.g. one-tile islet): fill tile.
+                    if (lwState === 0) {
+                      const b = cellTile(ix, iz);
+                      if (b === 1 || (b >= 11 && b <= 14)) return 255;
+                      return 0;
+                    }
+                    if (lwState === 15) return 255;
+                    const ids = getLandWaterTriCornerIds(lwState, ix, iz);
+                    const a0 = ids[0];
+                    const a1 = ids[1];
+                    const a2 = ids[2];
+                    const b0 = ids[3];
+                    const b1 = ids[4];
+                    const b2 = ids[5];
+                    let v = 0;
+                    if (pointInTri2(fxc, fzc, LX[a0], LZ[a0], LX[a1], LZ[a1], LX[a2], LZ[a2])) {
+                      v = landInterpInTri(fxc, fzc, a0, a1, a2, lvals);
+                    } else if (pointInTri2(fxc, fzc, LX[b0], LZ[b0], LX[b1], LZ[b1], LX[b2], LZ[b2])) {
+                      v = landInterpInTri(fxc, fzc, b0, b1, b2, lvals);
+                    } else {
+                      const bottom = l0 * (1 - fxc) + l1 * fxc;
+                      const top = l3 * (1 - fxc) + l2 * fxc;
+                      v = bottom * (1 - fzc) + top * fzc;
+                    }
+                    return v > 0.5 ? 255 : 0;
+                  }
+                  const data = new Uint8Array(maskRes * maskRes);
+                  // 1 = topside land (dry sand or grass), 0 = water — matches marching-squares shore, not whole tiles.
+                  let landCount = 0;
+                  for (let py = 0; py < maskRes; py++) {
+                    for (let px = 0; px < maskRes; px++) {
+                      const u = (px + 0.5) / maskRes;
+                      const v = (py + 0.5) / maskRes;
+                      const x = u * TILES_X * TILE_SIZE - WORLD_HALF_X;
+                      const z = v * TILES_Z * TILE_SIZE - WORLD_HALF_Z;
+                      const on = landMaskHardAtWorld(x, z);
+                      data[px + py * maskRes] = on;
+                      if (on) landCount++;
+                    }
+                  }
+                  // Hard mask (no blur): used to place foam at the true sand/water edge.
+                  const dataHard = new Uint8Array(data);
+                  function chamferDistance(srcOnIsZero) {
+                    const n = maskRes * maskRes;
+                    const inf = 1e9;
+                    const dist = new Float32Array(n);
+                    for (let i = 0; i < n; i++) {
+                      const on = dataHard[i] > 127;
+                      const zero = srcOnIsZero ? on : !on;
+                      dist[i] = zero ? 0 : inf;
+                    }
+                    const w1 = 1.0;
+                    const w2 = 1.41421356;
+                    // forward pass
+                    for (let y = 0; y < maskRes; y++) {
+                      const row = y * maskRes;
+                      for (let x = 0; x < maskRes; x++) {
+                        const i = row + x;
+                        let d = dist[i];
+                        if (x > 0) d = Math.min(d, dist[i - 1] + w1);
+                        if (y > 0) d = Math.min(d, dist[i - maskRes] + w1);
+                        if (x > 0 && y > 0) d = Math.min(d, dist[i - maskRes - 1] + w2);
+                        if (x + 1 < maskRes && y > 0) d = Math.min(d, dist[i - maskRes + 1] + w2);
+                        dist[i] = d;
+                      }
+                    }
+                    // backward pass
+                    for (let y = maskRes - 1; y >= 0; y--) {
+                      const row = y * maskRes;
+                      for (let x = maskRes - 1; x >= 0; x--) {
+                        const i = row + x;
+                        let d = dist[i];
+                        if (x + 1 < maskRes) d = Math.min(d, dist[i + 1] + w1);
+                        if (y + 1 < maskRes) d = Math.min(d, dist[i + maskRes] + w1);
+                        if (x + 1 < maskRes && y + 1 < maskRes) d = Math.min(d, dist[i + maskRes + 1] + w2);
+                        if (x > 0 && y + 1 < maskRes) d = Math.min(d, dist[i + maskRes - 1] + w2);
+                        dist[i] = d;
+                      }
+                    }
+                    return dist;
+                  }
+                  // Signed distance in mask texels: negative in water, positive in land.
+                  const dToLand = chamferDistance(true);
+                  const dToWater = chamferDistance(false);
+                  const sdfRange = 16.0; // texels; line placement uses this scale
+                  const sdf = new Uint8Array(maskRes * maskRes);
+                  for (let i = 0; i < sdf.length; i++) {
+                    let sd = dToLand[i] - dToWater[i];
+                    if (sd > sdfRange) sd = sdfRange;
+                    if (sd < -sdfRange) sd = -sdfRange;
+                    const enc = Math.round(((sd / sdfRange) * 0.5 + 0.5) * 255);
+                    sdf[i] = enc < 0 ? 0 : enc > 255 ? 255 : enc;
+                  }
+                  // Small blur to make the shoreline visually smooth in the water shader.
+                  const tmp = new Uint8Array(maskRes * maskRes);
+                  const rad = 4;
+                  for (let pass = 0; pass < 4; pass++) {
+                    // horiz
+                    for (let py = 0; py < maskRes; py++) {
+                      for (let px = 0; px < maskRes; px++) {
+                        let s = 0;
+                        let c = 0;
+                        for (let dx = -rad; dx <= rad; dx++) {
+                          const xx = px + dx;
+                          if (xx < 0 || xx >= maskRes) continue;
+                          s += data[xx + py * maskRes];
+                          c++;
+                        }
+                        tmp[px + py * maskRes] = c ? (s / c) | 0 : 0;
+                      }
+                    }
+                    // vert
+                    for (let py = 0; py < maskRes; py++) {
+                      for (let px = 0; px < maskRes; px++) {
+                        let s = 0;
+                        let c = 0;
+                        for (let dy = -rad; dy <= rad; dy++) {
+                          const yy = py + dy;
+                          if (yy < 0 || yy >= maskRes) continue;
+                          s += tmp[px + yy * maskRes];
+                          c++;
+                        }
+                        data[px + py * maskRes] = c ? (s / c) | 0 : 0;
+                      }
+                    }
+                  }
+                  const tSoft = new THREE.DataTexture(data, maskRes, maskRes, THREE.RedFormat);
+                  tSoft.needsUpdate = true;
+                  tSoft.wrapS = tSoft.wrapT = THREE.ClampToEdgeWrapping;
+                  tSoft.minFilter = THREE.LinearFilter;
+                  tSoft.magFilter = THREE.LinearFilter;
+                  const tHard = new THREE.DataTexture(dataHard, maskRes, maskRes, THREE.RedFormat);
+                  tHard.needsUpdate = true;
+                  tHard.wrapS = tHard.wrapT = THREE.ClampToEdgeWrapping;
+                  tHard.minFilter = THREE.LinearFilter;
+                  tHard.magFilter = THREE.LinearFilter;
+                  const tSdf = new THREE.DataTexture(sdf, maskRes, maskRes, THREE.RedFormat);
+                  tSdf.needsUpdate = true;
+                  tSdf.wrapS = tSdf.wrapT = THREE.ClampToEdgeWrapping;
+                  tSdf.minFilter = THREE.LinearFilter;
+                  tSdf.magFilter = THREE.LinearFilter;
+                  // #region agent log
+                  fetch("http://127.0.0.1:7866/ingest/0436cf02-d141-45f1-871d-6362a9532842", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "265487" },
+                    body: JSON.stringify({
+                      sessionId: "265487",
+                      hypothesisId: "H6-H7",
+                      location: "world-tiles.html:makeLandMaskTexture",
+                      message: "land mask texture built",
+                      data: {
+                        maskRes: maskRes,
+                        landFrac: landCount / (maskRes * maskRes),
+                        sampleCenter: data[((maskRes >> 1) + (maskRes >> 1) * maskRes)] / 255,
+                        sampleCorner: data[0] / 255
+                      },
+                      timestamp: Date.now(),
+                      runId: "pre-fix"
+                    })
+                  }).catch(function () {});
+                  // #endregion
+                  return { soft: tSoft, hard: tHard, sdf: tSdf, sdfRange: sdfRange };
+                }
+                const landMasks = makeLandMaskTextures();
+                const landMaskSoftTex = landMasks.soft;
+                const landMaskHardTex = landMasks.hard;
+                const landSdfTex = landMasks.sdf;
+                const landSdfRange = landMasks.sdfRange;
+                tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+                tex.colorSpace = THREE.SRGBColorSpace;
+                const rep = oceanExtent / waterTileWorldSpan;
+                // The shader already scales UVs by `uUvScale`; keep the texture itself at 1× repeat.
+                // Doubling repeat (texture repeat *and* shader scale) amplifies aliasing and can read as straight "lines".
+                tex.repeat.set(1, 1);
+                const maxA = renderer.capabilities.getMaxAnisotropy
+                  ? renderer.capabilities.getMaxAnisotropy()
+                  : 1;
+                tex.anisotropy = Math.min(8, maxA);
+                tex.needsUpdate = true;
+                const waterShader = new THREE.ShaderMaterial({
+                  uniforms: {
+                    waterMap: { value: tex },
+                    uLandMaskSoft: { value: landMaskSoftTex },
+                    uLandMaskHard: { value: landMaskHardTex },
+                    uLandSdf: { value: landSdfTex },
+                    uLandSdfRange: { value: landSdfRange },
+                    uWorldHalf: { value: new THREE.Vector2(WORLD_HALF_X, WORLD_HALF_Z) },
+                    uWorldSpan: { value: new THREE.Vector2(TILES_X * TILE_SIZE, TILES_Z * TILE_SIZE) },
+                    uLandTexel: {
+                      value: new THREE.Vector2(
+                        1 / ((landMaskSoftTex.image && landMaskSoftTex.image.width) || 512),
+                        1 / ((landMaskSoftTex.image && landMaskSoftTex.image.height) || 512)
+                      )
+                    },
+                    uTime: { value: 0 },
+                    uOpacity: { value: 0.48 },
+                    uUvScale: { value: new THREE.Vector2(rep, rep) }
+                  },
+                  transparent: true,
+                  depthWrite: false,
+                  depthTest: true,
+                  side: THREE.DoubleSide,
+                  toneMapped: false,
+                  vertexShader:
+                    "varying vec2 vUv;\n" +
+                    "varying vec2 vWorldXZ;\n" +
+                    "void main() {\n" +
+                    "  vUv = uv;\n" +
+                    "  vec4 wp = modelMatrix * vec4(position, 1.0);\n" +
+                    "  vWorldXZ = wp.xz;\n" +
+                    "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);\n" +
+                    "}\n",
+                  fragmentShader:
+                    "uniform sampler2D waterMap;\n" +
+                    "uniform sampler2D uLandMaskSoft;\n" +
+                    "uniform sampler2D uLandMaskHard;\n" +
+                    "uniform sampler2D uLandSdf;\n" +
+                    "uniform float uLandSdfRange;\n" +
+                    "uniform vec2 uWorldHalf;\n" +
+                    "uniform vec2 uWorldSpan;\n" +
+                    "uniform vec2 uLandTexel;\n" +
+                    "uniform float uTime;\n" +
+                    "uniform float uOpacity;\n" +
+                    "uniform vec2 uUvScale;\n" +
+                    "varying vec2 vUv;\n" +
+                    "varying vec2 vWorldXZ;\n" +
+                    "float hash21(vec2 p) {\n" +
+                    "  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);\n" +
+                    "}\n" +
+                    "float noise2(vec2 x) {\n" +
+                    "  vec2 i = floor(x);\n" +
+                    "  vec2 f = fract(x);\n" +
+                    "  float a = hash21(i);\n" +
+                    "  float b = hash21(i + vec2(1.0, 0.0));\n" +
+                    "  float c = hash21(i + vec2(0.0, 1.0));\n" +
+                    "  float d = hash21(i + vec2(1.0, 1.0));\n" +
+                    "  vec2 u = f * f * (3.0 - 2.0 * f);\n" +
+                    "  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);\n" +
+                    "}\n" +
+                    "float fbm(vec2 p) {\n" +
+                    "  float v = 0.0;\n" +
+                    "  float a = 0.5;\n" +
+                    "  for (int k = 0; k < 5; k++) {\n" +
+                    "    v += a * noise2(p);\n" +
+                    "    p *= 2.08;\n" +
+                    "    a *= 0.5;\n" +
+                    "  }\n" +
+                    "  return v;\n" +
+                    "}\n" +
+                    "void main() {\n" +
+                    "  float t = uTime;\n" +
+                    "  vec2 baseUv = vUv * uUvScale;\n" +
+                    "  vec2 adv1 = vec2(0.93, 0.39) * t * 0.045;\n" +
+                    "  vec2 adv2 = vec2(-0.61, 0.82) * t * 0.033;\n" +
+                    "  vec2 adv3 = vec2(0.22, -0.89) * t * 0.038;\n" +
+                    "  vec2 uvAnim = baseUv + adv1 + adv2 * 0.72 + adv3 * 0.56;\n" +
+                    "  vec2 drift = vec2(\n" +
+                    "    sin(t * 0.059 + 0.29) * 1.65 + sin(t * 0.037 + 1.08) * 0.9,\n" +
+                    "    cos(t * 0.052 + 0.76) * 1.52 + cos(t * 0.04 + 2.38) * 0.84\n" +
+                    "  );\n" +
+                    "  vec2 drift2 = vec2(\n" +
+                    "    cos(t * 0.033 + 2.08) * 1.3,\n" +
+                    "    sin(t * 0.039 + 0.17) * 1.3\n" +
+                    "  );\n" +
+                    "  vec2 rotUv = vec2(uvAnim.y, -uvAnim.x) * 0.95;\n" +
+                    "  vec2 liqA = vec2(\n" +
+                    "    fbm(uvAnim * 0.74 + drift * 0.58 + vec2(3.2, 9.9)),\n" +
+                    "    fbm(uvAnim * 0.74 + drift2 * 0.58 + vec2(16.4, 2.5))\n" +
+                    "  ) - 0.5;\n" +
+                    "  vec2 liqDom = uvAnim * 1.02 + liqA * 2.35;\n" +
+                    "  vec2 warpVec = vec2(\n" +
+                    "    fbm(liqDom + vec2(0.0, 11.7)) - 0.5,\n" +
+                    "    fbm(liqDom + vec2(18.2, 0.0)) - 0.5\n" +
+                    "  );\n" +
+                    "  vec2 warpFine = vec2(\n" +
+                    "    fbm(rotUv * 1.85 + drift * 0.75 + vec2(7.1, 33.2)) - 0.5,\n" +
+                    "    fbm(rotUv * 1.85 + drift2 * 0.75 + vec2(34.2, 5.3)) - 0.5\n" +
+                    "  );\n" +
+                    "  vec2 warpedUv = uvAnim + warpVec * 0.055 + warpFine * 0.024;\n" +
+                    "  vec4 texel = texture2D(waterMap, warpedUv);\n" +
+                    "  vec3 rgb = texel.rgb;\n" +
+                    "  float lum = dot(rgb, vec3(0.2126, 0.7152, 0.0722));\n" +
+                    "  vec3 deepB = vec3(0.22, 0.42, 0.62);\n" +
+                    "  vec3 midB = vec3(0.38, 0.62, 0.86);\n" +
+                    "  vec3 hiB = vec3(0.52, 0.76, 0.94);\n" +
+                    "  vec3 blueRamp = mix(deepB, midB, smoothstep(0.08, 0.45, lum));\n" +
+                    "  blueRamp = mix(blueRamp, hiB, smoothstep(0.42, 0.92, lum));\n" +
+                    "  rgb = mix(rgb, blueRamp, 0.62);\n" +
+                    "  vec2 gUv = uvAnim * vec2(0.11, 0.10);\n" +
+                    "  float bloom = 0.0;\n" +
+                    "  for (int i = 0; i < 5; i++) {\n" +
+                    "    float fi = float(i);\n" +
+                    "    vec2 offs = vec2(\n" +
+                    "      sin(t * 0.016 + fi * 1.97) * 6.283,\n" +
+                    "      cos(t * 0.014 + fi * 2.31) * 6.283\n" +
+                    "    );\n" +
+                    "    vec2 c = vec2(\n" +
+                    "      0.38 + 0.28 * sin(t * 0.011 * (0.7 + fi * 0.11) + fi * 4.1),\n" +
+                    "      0.42 + 0.26 * cos(t * 0.010 * (0.8 + fi * 0.09) + fi * 3.7)\n" +
+                    "    );\n" +
+                    "    vec2 q = fract(gUv + offs) - c;\n" +
+                    "    float d2 = dot(q, q);\n" +
+                    "    float pulse = 0.55 + 0.45 * sin(t * (0.52 + fi * 0.11) + d2 * 2.5);\n" +
+                    "    bloom += exp(-d2 * (11.0 + fi * 3.5)) * pulse * (0.17 - fi * 0.015);\n" +
+                    "  }\n" +
+                    "  rgb += vec3(0.58, 0.78, 0.92) * bloom * 0.22;\n" +
+                    "  float spark = smoothstep(0.94, 1.0, noise2(uvAnim * 48.0 + t * 0.14)) * 0.018;\n" +
+                    "  rgb += vec3(0.75, 0.88, 1.0) * spark;\n" +
+                    "  vec2 maskUv = (vWorldXZ + uWorldHalf) / max(uWorldSpan, vec2(0.0001));\n" +
+                    "  maskUv = clamp(maskUv, 0.0, 1.0);\n" +
+                    "  // Anti-aliased shoreline from the (blurred) land mask.\n" +
+                    "  float landSoft = texture2D(uLandMaskSoft, maskUv).r;\n" +
+                    "  float landHard = texture2D(uLandMaskHard, maskUv).r;\n" +
+                    "  // Signed distance field (in mask texels): negative in water, positive on land.\n" +
+                    "  float sd = (texture2D(uLandSdf, maskUv).r * 2.0 - 1.0) * uLandSdfRange;\n" +
+                    "  // Foam on the SDF zero (true land/water boundary), tiny jitter into water only.\n" +
+                    "  float wob = (noise2(vWorldXZ * 0.14 + vec2(t * 0.10, -t * 0.08)) - 0.5) * 0.12;\n" +
+                    "  float target = -0.04 + wob;\n" +
+                    "  float lineW = 0.40 + 0.18 * noise2(vWorldXZ * 0.21 + vec2(-t * 0.12, t * 0.11));\n" +
+                    "  float coastLine = 1.0 - smoothstep(lineW * 0.55, lineW, abs(sd - target));\n" +
+                    "  // Suppress foam in open ocean; keep narrow band around shoreline in mask space.\n" +
+                    "  float edgeMask = 1.0 - smoothstep(0.12, 0.52, abs(landHard - 0.5));\n" +
+                    "  coastLine *= edgeMask;\n" +
+                    "  vec3 lineCol = vec3(0.95, 0.98, 1.0);\n" +
+                    "  rgb += lineCol * coastLine * 0.58;\n" +
+                    "  float alpha = texel.a * uOpacity;\n" +
+                    "  // Keep water consistent; soft mask is kept for possible future use.\n" +
+                    "  rgb = rgb + landSoft * 0.0;\n" +
+                    "  gl_FragColor = vec4(rgb, alpha);\n" +
+                    "}\n"
+                });
+                const prev = oceanPlane.material;
+                oceanPlane.material = waterShader;
+                prev.dispose();
+                oceanWaterMat = waterShader;
+              },
+              undefined,
+              function () {
+                oceanMat.map = null;
+                oceanMat.color.setHex(WATER_MARINE_COLOR);
+                oceanMat.opacity = 0.46;
+                oceanMat.needsUpdate = true;
+              }
+            );
+          })();
+
+          /** Add ?tilelabels=1 to URL to show (each sprite costs GPU). Stride 14 keeps count low when on. */
+          const SHOW_TILE_DEBUG_LABELS = /(?:^|[?&])tilelabels=1(?:&|$)/.test(String(location.search || ""));
+          const DEBUG_LABEL_STRIDE = 14;
+          const TILE_LABEL_LIFT = 0.88 * CHARACTER_SCALE;
+          function makeTileLabelSprite(text) {
+            const padX = 20;
+            const padY = 14;
+            const fontPx = 28;
+            const cnv = document.createElement("canvas");
+            const ctx = cnv.getContext("2d");
+            ctx.font = "600 " + fontPx + "px system-ui,-apple-system,sans-serif";
+            const tw = Math.ceil(ctx.measureText(text).width);
+            cnv.width = Math.max(200, tw + padX * 2);
+            cnv.height = padY * 2 + fontPx + 8;
+            ctx.font = "600 " + fontPx + "px system-ui,-apple-system,sans-serif";
+            const tcx = cnv.width * 0.5;
+            const tcy = cnv.height * 0.5;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.strokeStyle = "rgba(0,0,0,0.5)";
+            ctx.lineWidth = 5;
+            ctx.lineJoin = "round";
+            ctx.strokeText(text, tcx, tcy);
+            ctx.fillStyle = "rgba(255,255,255,0.96)";
+            ctx.fillText(text, tcx, tcy);
+            const map = new THREE.CanvasTexture(cnv);
+            map.colorSpace = THREE.SRGBColorSpace;
+            const mat = new THREE.SpriteMaterial({
+              map: map,
+              transparent: true,
+              depthWrite: false,
+              depthTest: true,
+              sizeAttenuation: true
+            });
+            mat.toneMapped = false;
+            const spr = new THREE.Sprite(mat);
+            const aspect = cnv.width / cnv.height;
+            const hWorld = 0.58;
+            spr.scale.set(hWorld * aspect, hWorld, 1);
+            return spr;
+          }
+          if (SHOW_TILE_DEBUG_LABELS) {
+            for (let liz = 0; liz < TILES_Z; liz++) {
+              for (let lix = 0; lix < TILES_X; lix++) {
+                if ((lix + 2) % DEBUG_LABEL_STRIDE !== 0 || (liz + 2) % DEBUG_LABEL_STRIDE !== 0) continue;
+                const lp = worldXZFromCell(lix, liz);
+                const rcL = rampCornersForCell(lix, liz);
+                const yMid = (rcL.h_sw + rcL.h_se + rcL.h_ne + rcL.h_nw) * 0.25;
+                const lab = makeTileLabelSprite(tileDisplayNameForCell(lix, liz));
+                lab.position.set(lp.x, yMid + TILE_LABEL_LIFT, lp.z);
+                lab.renderOrder = 400;
+                scene.add(lab);
               }
             }
-            inst.instanceMatrix.needsUpdate = true;
-            inst.frustumCulled = false;
-            scene.add(inst);
-            groundPickables.push(inst);
-            shadowPickables.push(inst);
-            const pick = Math.floor(hashSeed2(WORLD_SEED_USED, 999) * landSpawnList.length) % landSpawnList.length;
-            sx = landSpawnList[pick].x;
-            sz = landSpawnList[pick].z;
           }
-          saveWorldTilesSnapshot(worldLandGrid, WORLD_SEED_USED);
+
+          function sortSpawnByArchipelagoRef(list) {
+            list.sort(function (a, b) {
+              const da = Math.hypot(a.ix - archipelagoSpawnRefCx, a.iz - archipelagoSpawnRefCz);
+              const db = Math.hypot(b.ix - archipelagoSpawnRefCx, b.iz - archipelagoSpawnRefCz);
+              return db - da;
+            });
+          }
+          /** Dry elevated grass +2 … +4 (biomes 12–14): above base beach and above sea for spawn. */
+          const highTerraceDry = landSpawnList.filter(function (s) {
+            return s.b >= 12 && s.b <= 14;
+          });
+          const terracePlus1 = landSpawnList.filter(function (s) {
+            return s.b === 11;
+          });
+          const shoreGrass = landSpawnList.filter(function (s) {
+            return s.b === 1;
+          });
+          let sx = 0;
+          let sz = 0;
+          if (highTerraceDry.length) {
+            sortSpawnByArchipelagoRef(highTerraceDry);
+            sx = highTerraceDry[0].x;
+            sz = highTerraceDry[0].z;
+          } else if (terracePlus1.length) {
+            sortSpawnByArchipelagoRef(terracePlus1);
+            sx = terracePlus1[0].x;
+            sz = terracePlus1[0].z;
+          } else if (shoreGrass.length) {
+            sortSpawnByArchipelagoRef(shoreGrass);
+            sx = shoreGrass[0].x;
+            sz = shoreGrass[0].z;
+          } else if (landSpawnList.length) {
+            sx = landSpawnList[0].x;
+            sz = landSpawnList[0].z;
+          }
+          if (sx === 0 && sz === 0) {
+            let found = false;
+            for (let siz = 0; siz < TILES_Z && !found; siz++) {
+              for (let six = 0; six < TILES_X && !found; six++) {
+                const b = worldTileGrid[six + siz * TILES_X];
+                if (b >= 12 && b <= 14) {
+                  const p = worldXZFromCell(six, siz);
+                  sx = p.x;
+                  sz = p.z;
+                  found = true;
+                }
+              }
+            }
+            if (!found) {
+              for (let siz = 0; siz < TILES_Z && !found; siz++) {
+                for (let six = 0; six < TILES_X && !found; six++) {
+                  const b = worldTileGrid[six + siz * TILES_X];
+                  if (b === 11) {
+                    const p = worldXZFromCell(six, siz);
+                    sx = p.x;
+                    sz = p.z;
+                    found = true;
+                  }
+                }
+              }
+            }
+            if (!found) {
+              const rci = Math.max(0, Math.min(TILES_X - 1, Math.round(archipelagoSpawnRefCx)));
+              const rzi = Math.max(0, Math.min(TILES_Z - 1, Math.round(archipelagoSpawnRefCz)));
+              const fb = worldXZFromCell(rci, rzi);
+              sx = fb.x;
+              sz = fb.z;
+            }
+          }
           return { x: sx, z: sz };
         })();
 
-        const oceanMat = new THREE.MeshBasicMaterial({
-          color: 0x2a6b8c,
-          toneMapped: false
-        });
-        const ocean = new THREE.Mesh(
-          new THREE.PlaneGeometry(WORLD_HALF * 2.8, WORLD_HALF * 2.8),
-          oceanMat
-        );
-        ocean.rotation.x = -Math.PI / 2;
-        ocean.position.y = -0.85;
-        ocean.renderOrder = -500;
-        scene.add(ocean);
+        (function spawnArchipelagoPalmPlaceholders() {
+          if (!archipelagoIslands.length) return;
+          const nbs8 = [
+            [-1, -1],
+            [0, -1],
+            [1, -1],
+            [-1, 0],
+            [1, 0],
+            [-1, 1],
+            [0, 1],
+            [1, 1]
+          ];
+          function tileBiomeIsWater(b) {
+            return b === 2 || (b >= 20 && b <= 23);
+          }
+          function tileBiomeIsDryLand(b) {
+            return b === 1 || (b >= 11 && b <= 14);
+          }
+          function cellTouchesWater(ix, iz) {
+            for (let nb = 0; nb < nbs8.length; nb++) {
+              const nx = ix + nbs8[nb][0];
+              const nz = iz + nbs8[nb][1];
+              if (nx < 0 || nx >= TILES_X || nz < 0 || nz >= TILES_Z) continue;
+              if (tileBiomeIsWater(worldTileGrid[nx + nz * TILES_X])) return true;
+            }
+            return false;
+          }
+          /** ~3× player billboard height (CHARACTER_FACE_H), with per-tree variation. */
+          const palmHeightMin = CHARACTER_FACE_H * 2.65;
+          const palmHeightMax = CHARACTER_FACE_H * 3.45;
+          const minTreeDist2 = TILE_SIZE * TILE_SIZE * 2.56;
+          const tl = new THREE.TextureLoader();
+          tl.load(
+            new URL("assets/palm-tree-outline.png", window.location.href).href,
+            function (tex) {
+              /** True RGBA silhouette (black ink, transparent outside). Replace `palm-tree-outline.png` to reskin. */
+              tex.colorSpace = THREE.SRGBColorSpace;
+              tex.premultiplyAlpha = false;
+              tex.needsUpdate = true;
+              const palmTex = tex;
+              const iw = palmTex.image.width || palmTex.image.naturalWidth || 1;
+              const ih = palmTex.image.height || palmTex.image.naturalHeight || 1;
+              const aspect = iw / ih;
+              const palmMat = new THREE.MeshBasicMaterial({
+                map: palmTex,
+                transparent: true,
+                alphaTest: 0.02,
+                side: THREE.DoubleSide,
+                depthTest: true,
+                depthWrite: false,
+                toneMapped: false
+              });
+              const palmGeom = new THREE.PlaneGeometry(1, 1);
+              for (let isl = 0; isl < archipelagoIslands.length; isl++) {
+                const o = archipelagoIslands[isl];
+                const nTrees = 1 + Math.floor(Math.random() * 3);
+                const cands = [];
+                for (let iz = 0; iz < TILES_Z; iz++) {
+                  for (let ix = 0; ix < TILES_X; ix++) {
+                    if (Math.hypot(ix - o.cx, iz - o.cz) > o.r - 0.2) continue;
+                    const b = worldTileGrid[ix + iz * TILES_X];
+                    if (!tileBiomeIsDryLand(b)) continue;
+                    if (cellTouchesWater(ix, iz)) continue;
+                    cands.push({ ix: ix, iz: iz });
+                  }
+                }
+                if (!cands.length) continue;
+                for (let i = cands.length - 1; i > 0; i--) {
+                  const j = (Math.random() * (i + 1)) | 0;
+                  const t = cands[i];
+                  cands[i] = cands[j];
+                  cands[j] = t;
+                }
+                const placed = [];
+                for (let ci = 0; ci < cands.length && placed.length < nTrees; ci++) {
+                  const c = cands[ci];
+                  const jox = (Math.random() - 0.5) * 0.5 * TILE_SIZE;
+                  const joz = (Math.random() - 0.5) * 0.5 * TILE_SIZE;
+                  const wp = worldXZFromCell(c.ix, c.iz);
+                  const wx = wp.x + jox;
+                  const wz = wp.z + joz;
+                  let okFar = true;
+                  for (let pi = 0; pi < placed.length; pi++) {
+                    const dx = wx - placed[pi].x;
+                    const dz = wz - placed[pi].z;
+                    if (dx * dx + dz * dz < minTreeDist2) {
+                      okFar = false;
+                      break;
+                    }
+                  }
+                  if (!okFar) continue;
+                  const h =
+                    palmHeightMin + Math.random() * Math.max(0.001, palmHeightMax - palmHeightMin);
+                  const rc = rampCornersForCell(c.ix, c.iz);
+                  const groundY = (rc.h_sw + rc.h_se + rc.h_ne + rc.h_nw) * 0.25;
+                  if (groundY <= SWIM_WATER_SURFACE_Y + 0.02) continue;
+                  const mesh = new THREE.Mesh(palmGeom, palmMat);
+                  mesh.scale.set(h * aspect, h, 1);
+                  mesh.position.set(wx, groundY + h * 0.5, wz);
+                  mesh.renderOrder = 6;
+                  scene.add(mesh);
+                  islandPalmBillboards.push(mesh);
+                  placed.push({ x: wx, z: wz });
+                }
+              }
+            },
+            undefined,
+            function () {}
+          );
+        })();
 
-        // Backup / restore outside this browser (JSON matches localStorage shape).
-        window.exportBillboardWorldTiles = function () {
-          try {
-            const raw = localStorage.getItem(WORLD_TILES_STORAGE_KEY);
-            if (!raw) return false;
-            const blob = new Blob([raw], { type: "application/json" });
-            const a = document.createElement("a");
-            const url = URL.createObjectURL(blob);
-            a.href = url;
-            a.download = "world-tiles-snapshot.json";
-            a.click();
-            URL.revokeObjectURL(url);
-            return true;
-          } catch (e) {
-            return false;
-          }
+        islandTerrainHeightBilinearFn = function (x, z) {
+          const ix = Math.floor((x + WORLD_HALF_X) / TILE_SIZE);
+          const iz = Math.floor((z + WORLD_HALF_Z) / TILE_SIZE);
+          if (ix < 0 || ix >= TILES_X || iz < 0 || iz >= TILES_Z) return null;
+          if (worldTileGrid[ix + iz * TILES_X] === 0) return null;
+          const rc = rampCornersForCell(ix, iz);
+          const u = THREE.MathUtils.clamp((x + WORLD_HALF_X) / TILE_SIZE - ix, 0, 1);
+          const v = THREE.MathUtils.clamp((z + WORLD_HALF_Z) / TILE_SIZE - iz, 0, 1);
+          return (
+            (1 - u) * (1 - v) * rc.h_sw +
+            u * (1 - v) * rc.h_se +
+            u * v * rc.h_ne +
+            (1 - u) * v * rc.h_nw
+          );
         };
-        window.importBillboardWorldTiles = function (jsonString) {
-          try {
-            const o = typeof jsonString === "string" ? JSON.parse(jsonString) : jsonString;
-            if (o.format !== WORLD_TILES_FORMAT) return false;
-            if (o.tileSize !== TILE_SIZE || o.worldGrid !== WORLD_GRID) return false;
-            if (!Array.isArray(o.land) || o.land.length !== WORLD_GRID * WORLD_GRID) return false;
-            localStorage.setItem(WORLD_TILES_STORAGE_KEY, JSON.stringify(o));
-            location.reload();
-            return true;
-          } catch (e) {
-            return false;
+
+        } else if (useBoardMap) {
+          (function buildBoardPyramidWorld() {
+            const halfBoard = 70;
+            mapBoardHalfExtent = halfBoard;
+
+            function createWorldCheckerMaterial(axisU, axisV, offsetU, offsetV, tileSize) {
+              return new THREE.ShaderMaterial({
+                uniforms: {
+                  uAxisU: { value: axisU.clone() },
+                  uAxisV: { value: axisV.clone() },
+                  uOffset: { value: new THREE.Vector2(offsetU, offsetV) },
+                  uTile: { value: tileSize }
+                },
+                vertexShader:
+                  "varying vec3 vWorld;\n" +
+                  "void main(){\n" +
+                  "  vec4 wp = modelMatrix * vec4(position, 1.0);\n" +
+                  "  vWorld = wp.xyz;\n" +
+                  "  gl_Position = projectionMatrix * viewMatrix * wp;\n" +
+                  "}\n",
+                fragmentShader:
+                  "uniform vec3 uAxisU;\n" +
+                  "uniform vec3 uAxisV;\n" +
+                  "uniform vec2 uOffset;\n" +
+                  "uniform float uTile;\n" +
+                  "varying vec3 vWorld;\n" +
+                  "void main(){\n" +
+                  "  float uu = dot(vWorld, uAxisU) + uOffset.x;\n" +
+                  "  float vv = dot(vWorld, uAxisV) + uOffset.y;\n" +
+                  "  float ia = floor(uu / uTile);\n" +
+                  "  float ib = floor(vv / uTile);\n" +
+                  "  float t = mod(ia + ib + 1000.0, 2.0);\n" +
+                  "  vec3 col = mix(vec3(0.0), vec3(1.0), t);\n" +
+                  "  gl_FragColor = vec4(col, 1.0);\n" +
+                  "}\n",
+                toneMapped: false,
+                depthWrite: true,
+                depthTest: true,
+                side: THREE.DoubleSide
+              });
+            }
+
+            const TILE_SQUARES = 35;
+            const TILE_WORLD = (halfBoard * 2) / TILE_SQUARES;
+
+            function makeCheckerDataTexture(squares) {
+              const size = 256;
+              const data = new Uint8Array(size * size * 4);
+              for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                  const tx = Math.floor((x / size) * squares);
+                  const ty = Math.floor((y / size) * squares);
+                  const white = ((tx + ty) & 1) === 1;
+                  const o = (y * size + x) * 4;
+                  data[o] = white ? 255 : 0;
+                  data[o + 1] = white ? 255 : 0;
+                  data[o + 2] = white ? 255 : 0;
+                  data[o + 3] = 255;
+                }
+              }
+              const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+              tex.colorSpace = THREE.SRGBColorSpace;
+              tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+              tex.repeat.set(1, 1);
+              tex.flipY = false;
+              tex.magFilter = THREE.NearestFilter;
+              tex.minFilter = THREE.NearestFilter;
+              tex.generateMipmaps = false;
+              tex.needsUpdate = true;
+              return tex;
+            }
+
+            const groundMat = new THREE.MeshBasicMaterial({
+              map: makeCheckerDataTexture(TILE_SQUARES),
+              toneMapped: false
+            });
+            const ground = new THREE.Mesh(new THREE.PlaneGeometry(140, 140), groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = GROUND_SURFACE_Y;
+            scene.add(ground);
+            groundPickables.push(ground);
+            shadowPickables.push(ground);
+
+            const CLIFF_HEIGHT = 3200;
+            const CLIFF_TOP_Y = GROUND_SURFACE_Y + 0.001;
+            const wallMatNorth = createWorldCheckerMaterial(
+              new THREE.Vector3(1, 0, 0),
+              new THREE.Vector3(0, -1, 0),
+              halfBoard,
+              2 * halfBoard,
+              TILE_WORLD
+            );
+            const wallMatSouth = createWorldCheckerMaterial(
+              new THREE.Vector3(1, 0, 0),
+              new THREE.Vector3(0, -1, 0),
+              halfBoard,
+              0,
+              TILE_WORLD
+            );
+            const wallMatEast = createWorldCheckerMaterial(
+              new THREE.Vector3(0, 0, 1),
+              new THREE.Vector3(0, -1, 0),
+              halfBoard,
+              2 * halfBoard,
+              TILE_WORLD
+            );
+            const wallMatWest = createWorldCheckerMaterial(
+              new THREE.Vector3(0, 0, 1),
+              new THREE.Vector3(0, -1, 0),
+              halfBoard,
+              0,
+              TILE_WORLD
+            );
+
+            const cliffGroup = new THREE.Group();
+            const wallGeom = new THREE.PlaneGeometry(halfBoard * 2, CLIFF_HEIGHT);
+
+            const wallEast = new THREE.Mesh(wallGeom, wallMatEast);
+            wallEast.position.set(halfBoard + 0.002, CLIFF_TOP_Y - CLIFF_HEIGHT * 0.5, 0);
+            wallEast.rotation.y = -Math.PI / 2;
+            cliffGroup.add(wallEast);
+
+            const wallWest = new THREE.Mesh(wallGeom, wallMatWest);
+            wallWest.position.set(-halfBoard - 0.002, CLIFF_TOP_Y - CLIFF_HEIGHT * 0.5, 0);
+            wallWest.rotation.y = Math.PI / 2;
+            cliffGroup.add(wallWest);
+
+            const wallNorth = new THREE.Mesh(wallGeom, wallMatNorth);
+            wallNorth.position.set(0, CLIFF_TOP_Y - CLIFF_HEIGHT * 0.5, halfBoard + 0.002);
+            wallNorth.rotation.y = Math.PI;
+            cliffGroup.add(wallNorth);
+
+            const wallSouth = new THREE.Mesh(wallGeom, wallMatSouth);
+            wallSouth.position.set(0, CLIFF_TOP_Y - CLIFF_HEIGHT * 0.5, -halfBoard - 0.002);
+            wallSouth.rotation.y = 0;
+            cliffGroup.add(wallSouth);
+
+            scene.add(cliffGroup);
+            shadowPickables.push(wallEast, wallWest, wallNorth, wallSouth);
+
+            const cornerInset = 14;
+            const cornerXZ = halfBoard - cornerInset;
+            const pyramidH = 8.5;
+            const pyramidR = 10.2;
+            function makeSharpPyramidGeometry(radius, height) {
+              const yTop = height * 0.5;
+              const yBot = -height * 0.5;
+              const apex = new THREE.Vector3(0, yTop, 0);
+              const b0 = new THREE.Vector3(radius, yBot, 0);
+              const b1 = new THREE.Vector3(0, yBot, radius);
+              const b2 = new THREE.Vector3(-radius, yBot, 0);
+              const b3 = new THREE.Vector3(0, yBot, -radius);
+              const tris = [apex, b1, b0, apex, b2, b1, apex, b3, b2, apex, b0, b3, b0, b2, b1, b0, b3, b2];
+              const pos = new Float32Array(tris.length * 3);
+              for (let i = 0; i < tris.length; i++) {
+                const v = tris[i];
+                pos[i * 3] = v.x;
+                pos[i * 3 + 1] = v.y;
+                pos[i * 3 + 2] = v.z;
+              }
+              const g = new THREE.BufferGeometry();
+              g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+              g.computeVertexNormals();
+              g.computeBoundingSphere();
+              return g;
+            }
+            const pyramidGeom = makeSharpPyramidGeometry(pyramidR, pyramidH);
+            (function addBarycentric(geom) {
+              const posAttr = geom.getAttribute("position");
+              const vCount = posAttr.count;
+              const bary = new Float32Array(vCount * 3);
+              for (let i = 0; i < vCount; i += 3) {
+                bary[(i + 0) * 3 + 0] = 1;
+                bary[(i + 0) * 3 + 1] = 0;
+                bary[(i + 0) * 3 + 2] = 0;
+                bary[(i + 1) * 3 + 0] = 0;
+                bary[(i + 1) * 3 + 1] = 1;
+                bary[(i + 1) * 3 + 2] = 0;
+                bary[(i + 2) * 3 + 0] = 0;
+                bary[(i + 2) * 3 + 1] = 0;
+                bary[(i + 2) * 3 + 2] = 1;
+              }
+              geom.setAttribute("aBary", new THREE.BufferAttribute(bary, 3));
+            })(pyramidGeom);
+
+            function createPaintedEdgeMaterial(edgeColor) {
+              return new THREE.ShaderMaterial({
+                uniforms: {
+                  uColor: { value: new THREE.Color(edgeColor) },
+                  uThickness: { value: 0.028 }
+                },
+                vertexShader:
+                  "attribute vec3 aBary;\n" +
+                  "varying vec3 vBary;\n" +
+                  "void main() {\n" +
+                  "  vBary = aBary;\n" +
+                  "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);\n" +
+                  "}\n",
+                fragmentShader:
+                  "uniform vec3 uColor;\n" +
+                  "uniform float uThickness;\n" +
+                  "varying vec3 vBary;\n" +
+                  "void main() {\n" +
+                  "  float e = min(min(vBary.x, vBary.y), vBary.z);\n" +
+                  "  float aa = fwidth(e) * 1.6;\n" +
+                  "  float line = 1.0 - smoothstep(uThickness - aa, uThickness + aa, e);\n" +
+                  "  if (line < 0.01) discard;\n" +
+                  "  gl_FragColor = vec4(uColor, line);\n" +
+                  "}\n",
+                transparent: true,
+                depthTest: true,
+                depthWrite: false,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -2
+              });
+            }
+            function pyramidCartoonColor(hex) {
+              const col = new THREE.Color(hex);
+              const hsl = { h: 0, s: 0, l: 0 };
+              col.getHSL(hsl);
+              const h = hsl.h;
+              if (h < 0.045 || h > 0.965) {
+                hsl.s = 1.0;
+                hsl.l = THREE.MathUtils.clamp(hsl.l * 0.88 + 0.06, 0.48, 0.58);
+                col.setHSL(h, hsl.s, hsl.l);
+                return col;
+              }
+              if (h > 0.52 && h < 0.72) {
+                hsl.s = Math.min(1, Math.max(hsl.s * 1.08 + 0.06, 0.96));
+                hsl.l = THREE.MathUtils.clamp(hsl.l * 0.9 + 0.04, 0.5, 0.62);
+                col.setHSL(h, hsl.s, hsl.l);
+                return col;
+              }
+              if (h > 0.11 && h < 0.2) {
+                const y = new THREE.Color(0xffd817);
+                const yh = { h: 0, s: 0, l: 0 };
+                y.getHSL(yh);
+                yh.s = Math.min(1, yh.s + 0.04);
+                yh.l = THREE.MathUtils.clamp(yh.l + 0.02, 0.52, 0.62);
+                return new THREE.Color().setHSL(yh.h, yh.s, yh.l);
+              }
+              hsl.s = Math.min(1, hsl.s * 3.05 + 0.52);
+              hsl.s = Math.max(hsl.s, 0.97);
+              hsl.l = THREE.MathUtils.clamp(hsl.l * 1.06 + 0.26, 0.64, 0.84);
+              col.setHSL(hsl.h, hsl.s, hsl.l);
+              return col;
+            }
+            function pyramidEdgeColorFrom(bright) {
+              const hsl = { h: 0, s: 0, l: 0 };
+              bright.getHSL(hsl);
+              hsl.s = Math.min(1, hsl.s * 1.25 + 0.14);
+              hsl.l = Math.min(0.84, hsl.l + 0.1);
+              return new THREE.Color().setHSL(hsl.h, hsl.s, hsl.l);
+            }
+            const pyramidCorners = [
+              { x: cornerXZ, z: cornerXZ, color: 0xff2d2d },
+              { x: cornerXZ, z: -cornerXZ, color: 0x1478ff },
+              { x: -cornerXZ, z: -cornerXZ, color: 0xffd817 },
+              { x: -cornerXZ, z: cornerXZ, color: 0x42da72 }
+            ];
+            for (let i = 0; i < pyramidCorners.length; i++) {
+              const c = pyramidCorners[i];
+              const group = new THREE.Group();
+              group.position.set(c.x, GROUND_SURFACE_Y + pyramidH / 2, c.z);
+              group.rotation.y = Math.PI / 4;
+              const bright = pyramidCartoonColor(c.color);
+              const edgeCol = pyramidEdgeColorFrom(bright);
+              const pyr = new THREE.Mesh(
+                pyramidGeom,
+                new THREE.MeshPhysicalMaterial({
+                  color: bright,
+                  emissive: bright.clone(),
+                  emissiveIntensity: 0.14,
+                  metalness: 0.0,
+                  roughness: 0.95,
+                  flatShading: true,
+                  side: THREE.DoubleSide,
+                  clearcoat: 0.06,
+                  clearcoatRoughness: 0.75,
+                  envMapIntensity: 0.25,
+                  specularIntensity: 0.35,
+                  specularColor: new THREE.Color(0xffffff),
+                  reflectivity: 0.12
+                })
+              );
+              group.add(pyr);
+              const outline = new THREE.Mesh(pyramidGeom, createPaintedEdgeMaterial(edgeCol));
+              outline.renderOrder = 1;
+              group.add(outline);
+              scene.add(group);
+              groundPickables.push(pyr);
+              shadowPickables.push(pyr);
+            }
+
+            for (let si = 0; si < 420; si++) {
+              const x = (Math.random() * 2 - 1) * 58;
+              const z = (Math.random() * 2 - 1) * 58;
+              landSpawnList.push({ x: x, z: z, b: 1, ix: 0, iz: 0 });
+            }
+            tileWorldSpawn = { x: 0, z: 0 };
+          })();
+        } else {
+          (function buildTesseractWorld() {
+            // Trippy mirror labyrinth world: walkable mirrored floor + liquid-glass mirror walls.
+            mapBoardHalfExtent = 70;
+            // Spawn a bunch of points so NPCs can exist; keep them near origin.
+            for (let si = 0; si < 420; si++) {
+              const x = (Math.random() * 2 - 1) * 46;
+              const z = (Math.random() * 2 - 1) * 46;
+              landSpawnList.push({ x: x, z: z, b: 1, ix: 0, iz: 0 });
+            }
+            tileWorldSpawn = { x: 0, z: 0 };
+
+            const floorGeo = new THREE.PlaneGeometry(160, 160, 1, 1);
+            const floorMat = new THREE.MeshStandardMaterial({
+              color: 0xcfe9ff,
+              roughness: 0.08,
+              metalness: 0.55,
+              emissive: new THREE.Color(0x1a2a3a),
+              emissiveIntensity: 0.18
+            });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.set(0, GROUND_SURFACE_Y, 0);
+            floor.receiveShadow = false;
+            floor.userData.tileKey = "mirror_labyrinth_floor";
+            floor.userData.solid = true;
+            scene.add(floor);
+            groundPickables.push(floor);
+            shadowPickables.push(floor);
+
+            function createLiquidGlassMaterial() {
+              const mat = new THREE.ShaderMaterial({
+                transparent: true,
+                depthWrite: false,
+                depthTest: true,
+                side: THREE.DoubleSide,
+                toneMapped: false,
+                uniforms: {
+                  uTime: { value: 0 },
+                  uTint: { value: new THREE.Vector3(0.78, 0.92, 1.0) },
+                  uTint2: { value: new THREE.Vector3(0.45, 0.78, 1.0) },
+                  uOpacity: { value: 0.48 }
+                },
+                vertexShader:
+                  "uniform float uTime;\n" +
+                  "varying vec3 vWp;\n" +
+                  "varying vec3 vN;\n" +
+                  "float h3(vec3 p){ return fract(sin(dot(p, vec3(127.1,311.7,74.7))) * 43758.5453); }\n" +
+                  "float n3(vec3 x){ vec3 i=floor(x), f=fract(x); f=f*f*(3.0-2.0*f);\n" +
+                  "  float a=h3(i);\n" +
+                  "  float b=h3(i+vec3(1,0,0));\n" +
+                  "  float c=h3(i+vec3(0,1,0));\n" +
+                  "  float d=h3(i+vec3(1,1,0));\n" +
+                  "  float e=h3(i+vec3(0,0,1));\n" +
+                  "  float f1=h3(i+vec3(1,0,1));\n" +
+                  "  float g=h3(i+vec3(0,1,1));\n" +
+                  "  float h=h3(i+vec3(1,1,1));\n" +
+                  "  float x1=mix(a,b,f.x);\n" +
+                  "  float x2=mix(c,d,f.x);\n" +
+                  "  float x3=mix(e,f1,f.x);\n" +
+                  "  float x4=mix(g,h,f.x);\n" +
+                  "  float y1=mix(x1,x2,f.y);\n" +
+                  "  float y2=mix(x3,x4,f.y);\n" +
+                  "  return mix(y1,y2,f.z);\n" +
+                  "}\n" +
+                  "void main(){\n" +
+                  "  vec3 p = position;\n" +
+                  "  float t = uTime;\n" +
+                  "  float w = n3(p*1.35 + vec3(0.0, t*0.32, t*0.21));\n" +
+                  "  vec3 warp = normalize(normal + vec3(0.22,0.16,0.18)) * (w - 0.5) * 0.18;\n" +
+                  "  p += warp;\n" +
+                  "  vec4 wp = modelMatrix * vec4(p,1.0);\n" +
+                  "  vWp = wp.xyz;\n" +
+                  "  vN = normalize(normalMatrix * normal);\n" +
+                  "  gl_Position = projectionMatrix * viewMatrix * wp;\n" +
+                  "}\n",
+                fragmentShader:
+                  "uniform float uTime;\n" +
+                  "uniform vec3 uTint;\n" +
+                  "uniform vec3 uTint2;\n" +
+                  "uniform float uOpacity;\n" +
+                  "varying vec3 vWp;\n" +
+                  "varying vec3 vN;\n" +
+                  "vec3 envCol(vec3 r){\n" +
+                  "  // Fake environment: horizon gradient + subtle spectral sheen.\n" +
+                  "  float h = clamp(r.y * 0.5 + 0.5, 0.0, 1.0);\n" +
+                  "  vec3 sky0 = vec3(0.09, 0.16, 0.25);\n" +
+                  "  vec3 sky1 = vec3(0.55, 0.78, 0.95);\n" +
+                  "  vec3 c = mix(sky0, sky1, smoothstep(0.0, 1.0, h));\n" +
+                  "  float s = sin((r.x + r.z) * 8.0 + uTime * 0.7) * 0.5 + 0.5;\n" +
+                  "  c += vec3(0.25, 0.45, 0.65) * s * 0.08;\n" +
+                  "  return c;\n" +
+                  "}\n" +
+                  "float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }\n" +
+                  "float n2(vec2 x){ vec2 i=floor(x), f=fract(x); f=f*f*(3.0-2.0*f);\n" +
+                  "  float a=h2(i);\n" +
+                  "  float b=h2(i+vec2(1,0));\n" +
+                  "  float c=h2(i+vec2(0,1));\n" +
+                  "  float d=h2(i+vec2(1,1));\n" +
+                  "  return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);\n" +
+                  "}\n" +
+                  "void main(){\n" +
+                  "  vec3 N = normalize(vN);\n" +
+                  "  vec3 V = normalize(cameraPosition - vWp);\n" +
+                  "  float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 4.0);\n" +
+                  "  vec3 R = reflect(-V, N);\n" +
+                  "  float t = uTime;\n" +
+                  "  vec2 p = vWp.xz * 0.22;\n" +
+                  "  float ripple = n2(p + vec2(t*0.12, -t*0.09));\n" +
+                  "  float ripple2 = n2(p*1.9 + vec2(-t*0.07, t*0.11));\n" +
+                  "  float glass = (ripple*0.6 + ripple2*0.4);\n" +
+                  "  vec3 col = mix(uTint2, uTint, smoothstep(0.18, 0.86, glass));\n" +
+                  "  float edge = smoothstep(0.0, 1.0, fres);\n" +
+                  "  vec3 env = envCol(R);\n" +
+                  "  col = mix(col, env, 0.55 * edge);\n" +
+                  "  col += vec3(1.0) * edge * 0.38;\n" +
+                  "  // subtle internal caustic shimmer\n" +
+                  "  col += vec3(0.7, 0.9, 1.0) * (glass - 0.5) * 0.10;\n" +
+                  "  float alpha = uOpacity * (0.55 + 0.45 * edge);\n" +
+                  "  gl_FragColor = vec4(col, alpha);\n" +
+                  "}\n"
+              });
+              return mat;
+            }
+
+            function addMirrorLabyrinthWorld() {
+              const group = new THREE.Group();
+              group.position.set(0, GROUND_SURFACE_Y, 0);
+              group.renderOrder = 2;
+              scene.add(group);
+
+              const wallMat = createLiquidGlassMaterial();
+              // Drive glass animation off the global tesseractGlassMat timer.
+              tesseractGlassMat = wallMat;
+              wallMat.uniforms.uTint.value.set(0.85, 0.95, 1.0);
+              wallMat.uniforms.uTint2.value.set(0.6, 0.85, 1.0);
+              wallMat.uniforms.uOpacity.value = 0.72;
+
+              const cell = 4.2;
+              const mw = 13;
+              const mh = 13;
+              const wallH = 5.6;
+              const thickness = 0.5;
+              const originX = -mw * cell * 0.5;
+              const originZ = -mh * cell * 0.5;
+
+              // Maze walls: vWalls between columns (mw+1 by mh), hWalls between rows (mw by mh+1).
+              const vWalls = new Uint8Array((mw + 1) * mh);
+              const hWalls = new Uint8Array(mw * (mh + 1));
+              for (let i = 0; i < vWalls.length; i++) vWalls[i] = 1;
+              for (let i = 0; i < hWalls.length; i++) hWalls[i] = 1;
+              const vis = new Uint8Array(mw * mh);
+              function vI(x, z) {
+                return x + z * (mw + 1);
+              }
+              function hI(x, z) {
+                return x + z * mw;
+              }
+              function cI(x, z) {
+                return x + z * mw;
+              }
+              function carveMaze(sx, sz) {
+                const stack = [[sx, sz]];
+                vis[cI(sx, sz)] = 1;
+                while (stack.length) {
+                  const top = stack[stack.length - 1];
+                  const x = top[0];
+                  const z = top[1];
+                  const dirs = [
+                    [1, 0],
+                    [-1, 0],
+                    [0, 1],
+                    [0, -1]
+                  ];
+                  for (let k = dirs.length - 1; k > 0; k--) {
+                    const j = (Math.random() * (k + 1)) | 0;
+                    const t = dirs[k];
+                    dirs[k] = dirs[j];
+                    dirs[j] = t;
+                  }
+                  let moved = false;
+                  for (let di = 0; di < 4; di++) {
+                    const nx = x + dirs[di][0];
+                    const nz = z + dirs[di][1];
+                    if (nx < 0 || nx >= mw || nz < 0 || nz >= mh) continue;
+                    if (vis[cI(nx, nz)]) continue;
+                    // Knock down the wall between (x,z) and (nx,nz)
+                    if (nx === x + 1) vWalls[vI(x + 1, z)] = 0;
+                    else if (nx === x - 1) vWalls[vI(x, z)] = 0;
+                    else if (nz === z + 1) hWalls[hI(x, z + 1)] = 0;
+                    else if (nz === z - 1) hWalls[hI(x, z)] = 0;
+                    vis[cI(nx, nz)] = 1;
+                    stack.push([nx, nz]);
+                    moved = true;
+                    break;
+                  }
+                  if (!moved) stack.pop();
+                }
+              }
+              carveMaze((Math.random() * mw) | 0, (Math.random() * mh) | 0);
+              // Ensure entrances so it doesn't feel sealed.
+              hWalls[hI(((mw * 0.5) | 0), 0)] = 0;
+              hWalls[hI(((mw * 0.5) | 0), mh)] = 0;
+
+              const wallGeoX = new THREE.BoxGeometry(cell + thickness, wallH, thickness, 1, 1, 1);
+              const wallGeoZ = new THREE.BoxGeometry(thickness, wallH, cell + thickness, 1, 1, 1);
+              const segs = [];
+              // Horizontal walls (along X) at z edges
+              for (let z = 0; z <= mh; z++) {
+                for (let x = 0; x < mw; x++) {
+                  if (!hWalls[hI(x, z)]) continue;
+                  const wx = originX + (x + 0.5) * cell;
+                  const wz = originZ + z * cell;
+                  segs.push({ x: wx, z: wz, kind: "x" });
+                }
+              }
+              // Vertical walls (along Z) at x edges
+              for (let z = 0; z < mh; z++) {
+                for (let x = 0; x <= mw; x++) {
+                  if (!vWalls[vI(x, z)]) continue;
+                  const wx = originX + x * cell;
+                  const wz = originZ + (z + 0.5) * cell;
+                  segs.push({ x: wx, z: wz, kind: "z" });
+                }
+              }
+
+              const xs = segs.filter(function (s) {
+                return s.kind === "x";
+              });
+              const zs = segs.filter(function (s) {
+                return s.kind === "z";
+              });
+              const instX = new THREE.InstancedMesh(wallGeoX, wallMat, Math.max(1, xs.length));
+              const instZ = new THREE.InstancedMesh(wallGeoZ, wallMat, Math.max(1, zs.length));
+              instX.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+              instZ.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+              instX.frustumCulled = false;
+              instZ.frustumCulled = false;
+              const o = new THREE.Object3D();
+              for (let i = 0; i < xs.length; i++) {
+                const s = xs[i];
+                o.position.set(s.x, GROUND_SURFACE_Y + wallH * 0.5, s.z);
+                o.rotation.set(0, 0, 0);
+                // Trippy liquid wobble: subtle per-segment tilt.
+                o.rotation.y = Math.sin(i * 0.23) * 0.06;
+                o.rotation.z = Math.cos(i * 0.19) * 0.05;
+                o.scale.setScalar(1);
+                o.updateMatrix();
+                instX.setMatrixAt(i, o.matrix);
+              }
+              for (let i = 0; i < zs.length; i++) {
+                const s = zs[i];
+                o.position.set(s.x, GROUND_SURFACE_Y + wallH * 0.5, s.z);
+                o.rotation.set(0, 0, 0);
+                o.rotation.y = Math.sin(i * 0.21) * 0.06;
+                o.rotation.x = Math.cos(i * 0.17) * 0.05;
+                o.scale.setScalar(1);
+                o.updateMatrix();
+                instZ.setMatrixAt(i, o.matrix);
+              }
+              instX.instanceMatrix.needsUpdate = true;
+              instZ.instanceMatrix.needsUpdate = true;
+              group.add(instX);
+              group.add(instZ);
+              tesseractFractal = { group };
+            }
+
+            function addRainbowDragon() {
+              const segCount = 220;
+              const headScale = 1.85;
+              const bodyR = 0.26;
+              const geo = new THREE.SphereGeometry(bodyR, 12, 10);
+              // Unlit so it stays vivid regardless of lighting/shadows.
+              const mat = new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.98,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending
+              });
+              const inst = new THREE.InstancedMesh(geo, mat, segCount);
+              inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+              inst.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(segCount * 3), 3);
+              inst.frustumCulled = false;
+              inst.renderOrder = 3;
+              scene.add(inst);
+
+              tesseractDragon = {
+                inst,
+                segCount,
+                headScale,
+                bodyR,
+                phase: Math.random() * 1000,
+                center: new THREE.Vector3(0, GROUND_SURFACE_Y + 6.4, 0),
+                baseR: 14.5,
+                yAmp: 2.6,
+                snakeAmp: 1.75,
+                speed: 0.55
+              };
+            }
+
+            addMirrorLabyrinthWorld();
+            addRainbowDragon();
+          })();
+        }
+
+        // --- Swim (island shallow / deep tiles): Space rises gently; buoyancy keeps you near the surface ---
+        const SWIM_GRAVITY = -6.6;
+        const SWIM_BUOY_K = 5.8;
+        const SWIM_DRAG_V = 0.986;
+        /** Buoyancy target: feet Y offset from SWIM_WATER_SURFACE_Y (higher = more sprite above the water). */
+        const SWIM_SURFACE_FEET_TARGET = 0.34;
+        /** Max feet Y above surface plane (allows bob without popping through). */
+        const SWIM_FEET_MAX_ABOVE_SURFACE = 0.52;
+        const SWIM_SPACE_IMPULSE = 5.5;
+        const SWIM_MAX_UP = 7.2;
+        const SWIM_MAX_DOWN = -11;
+        const NPC_SWIM_GRAVITY = -6.1;
+        const NPC_SWIM_BUOY_K = 5.0;
+        const NPC_SWIM_DRAG = 0.987;
+
+        function isSwimmableWaterBiomeAt(x, z) {
+          if (!isIslandMap) return false;
+          const b = worldBiomeAt(x, z);
+          return b === 2 || (b >= 20 && b <= 23);
+        }
+
+        function entitySwimmingActive(x, z, feetY) {
+          if (!isSwimmableWaterBiomeAt(x, z)) return false;
+          // Allow treading with feet slightly above the surface plane (matches SWIM_FEET_MAX_ABOVE_SURFACE).
+          return feetY < SWIM_WATER_SURFACE_Y + SWIM_FEET_MAX_ABOVE_SURFACE + 0.1;
+        }
+
+        /** Vertical step for NPCs in water (returns true if swim handled this frame). */
+        function applyNpcSwimStep(g, n, dt, segHalfH) {
+          if (!isIslandMap) return false;
+          const px = g.position.x;
+          const pz = g.position.z;
+          const feetY = g.position.y - segHalfH;
+          if (!entitySwimmingActive(px, pz, feetY)) return false;
+          const solidGy = sampleSolidGroundY(px, pz);
+          const surfaceY = SWIM_WATER_SURFACE_Y;
+          const targetFeet = surfaceY + SWIM_SURFACE_FEET_TARGET;
+          n.vY += NPC_SWIM_GRAVITY * dt;
+          n.vY += NPC_SWIM_BUOY_K * (targetFeet - feetY) * dt;
+          n.vY *= NPC_SWIM_DRAG;
+          n.vY = THREE.MathUtils.clamp(n.vY, -11, 5.8);
+          g.position.y += n.vY * dt;
+          let fy = g.position.y - segHalfH;
+          if (solidGy != null && fy < solidGy + 0.08 && n.vY <= 0.45) {
+            g.position.y = solidGy + segHalfH;
+            n.vY = 0;
           }
-        };
+          fy = g.position.y - segHalfH;
+          if (fy > surfaceY + SWIM_FEET_MAX_ABOVE_SURFACE) {
+            g.position.y = surfaceY + SWIM_FEET_MAX_ABOVE_SURFACE + segHalfH;
+            n.vY = Math.min(0, n.vY) * 0.45;
+          }
+          return true;
+        }
 
         function textureFromImageWithBlackTransparent(image, blurPx, edgeBlurStrength) {
           const w = image.naturalWidth || image.width;
@@ -1289,10 +3371,130 @@
 
         let spiralMesh = null;
 
+        function addPondFallback() {
+          const mat = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            depthTest: true,
+            depthWrite: true,
+            side: THREE.DoubleSide
+          });
+          pondMaterial = mat;
+          pondBounds = { kind: "circle", radius: 8 };
+          const pond = new THREE.Mesh(new THREE.CircleGeometry(8, 48), mat);
+          pond.rotation.x = -Math.PI / 2;
+          pond.position.set(0, GROUND_SURFACE_Y + 0.02, 0);
+          pond.renderOrder = 0;
+          scene.add(pond);
+          groundPickables.push(pond);
+          shadowPickables.push(pond);
+        }
+
+        if (useBoardMap) {
+          (function loadSpiralTexture() {
+            const texLoader = new THREE.TextureLoader();
+            texLoader.crossOrigin = "anonymous";
+            const spiralUrl = new URL("spiral.png", window.location.href).href;
+            texLoader.load(
+              spiralUrl,
+              function (tex) {
+                tex.colorSpace = THREE.SRGBColorSpace;
+                const spiralTex = textureFromImageWithBlackTransparent(tex.image, 0, 0);
+                const iw = tex.image.naturalWidth || tex.image.width;
+                const ih = tex.image.naturalHeight || tex.image.height;
+                const aspect = iw / Math.max(1, ih);
+                const maxSpan = 16;
+                let pw;
+                let ph;
+                if (aspect >= 1) {
+                  pw = maxSpan;
+                  ph = maxSpan / aspect;
+                } else {
+                  ph = maxSpan;
+                  pw = maxSpan * aspect;
+                }
+                const mat = createSpiralMaterial(spiralTex);
+                pondMaterial = mat;
+                pondBounds = { kind: "ellipse", halfW: pw / 2, halfH: ph / 2 };
+                const spiral = new THREE.Mesh(new THREE.PlaneGeometry(pw, ph), mat);
+                spiral.rotation.x = -Math.PI / 2;
+                spiral.position.set(0, GROUND_SURFACE_Y + 0.02, 0);
+                spiral.renderOrder = 0;
+                scene.add(spiral);
+                spiralMesh = spiral;
+                groundPickables.push(spiral);
+                shadowPickables.push(spiral);
+              },
+              undefined,
+              function () {
+                addPondFallback();
+              }
+            );
+          })();
+        }
+
+        const downRaycaster = new THREE.Raycaster();
+        const downRayOrigin = new THREE.Vector3();
+        const downRayDir = new THREE.Vector3(0, -1, 0);
+
+        function sampleSurfaceY(x, z) {
+          if (isIslandMap && islandTerrainHeightBilinearFn) {
+            const yIsland = islandTerrainHeightBilinearFn(x, z);
+            if (yIsland != null) return yIsland;
+          }
+          downRayOrigin.set(x, 220, z);
+          downRaycaster.set(downRayOrigin, downRayDir);
+          const hits = downRaycaster.intersectObjects(groundPickables, false);
+          return hits.length ? hits[0].point.y : null;
+        }
+
+        /** Seabed / solid tiles only (skips the transparent ocean plane used for swim volume). */
+        function sampleSolidGroundY(x, z) {
+          if (isIslandMap && islandTerrainHeightBilinearFn) {
+            const yIsland = islandTerrainHeightBilinearFn(x, z);
+            if (yIsland != null) return yIsland;
+          }
+          downRayOrigin.set(x, 220, z);
+          downRaycaster.set(downRayOrigin, downRayDir);
+          const hits = downRaycaster.intersectObjects(groundPickables, false);
+          for (let hi = 0; hi < hits.length; hi++) {
+            const o = hits[hi].object;
+            const u = o && o.userData;
+            if (u && u.tileKey === "water_ocean_plane") continue;
+            if (u && u.solid === false) continue;
+            return hits[hi].point.y;
+          }
+          return null;
+        }
+
+        function raycastDownSurface(x, z, outPoint, outNormal) {
+          downRayOrigin.set(x, 220, z);
+          downRaycaster.set(downRayOrigin, downRayDir);
+          const hits = downRaycaster.intersectObjects(shadowPickables, false);
+          if (!hits.length) {
+            return false;
+          }
+          const hit = hits[0];
+          outPoint.copy(hit.point);
+          if (hit.face) {
+            outNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
+          } else {
+            outNormal.set(0, 1, 0);
+          }
+          outNormal.normalize();
+          return true;
+        }
+
         const playerHalfHeight = 0.18 * CHARACTER_SCALE;
         const player = new THREE.Group();
-        // Random land tile on the generated continent.
-        player.position.set(tileWorldSpawn.x, playerHalfHeight, tileWorldSpawn.z);
+        let playerSpawnY = playerHalfHeight;
+        const spawnGroundHit = sampleSurfaceY(tileWorldSpawn.x, tileWorldSpawn.z);
+        if (spawnGroundHit != null) {
+          playerSpawnY = spawnGroundHit + playerHalfHeight;
+          if (spawnGroundHit <= SWIM_WATER_SURFACE_Y + 0.02) {
+            playerSpawnY = SWIM_WATER_SURFACE_Y + 0.06 + playerHalfHeight;
+          }
+        }
+        player.position.set(tileWorldSpawn.x, playerSpawnY, tileWorldSpawn.z);
         player.rotation.y = Math.PI / 4;
         const cameraAnchor = new THREE.Vector3();
         cameraAnchor.copy(player.position);
@@ -1655,8 +3857,9 @@
 
         let playerShadow = null;
         let sharedShadowTex = null;
-        const SHADOW_GRID_RINGS = 7;
-        const SHADOW_GRID_SEGS = 32;
+        /** Fewer rings/segments = fewer ground raycasts per frame (was 7×32 → heavy). */
+        const SHADOW_GRID_RINGS = 4;
+        const SHADOW_GRID_SEGS = 14;
         const SHADOW_PROJ_RADIUS = 0.4 * CHARACTER_SCALE;
         const SHADOW_SURFACE_BIAS = 0.055;
         const shadowProjGeo = new THREE.BufferGeometry();
@@ -2105,6 +4308,17 @@
 
           if (playerFaceMat.uniforms.map.value !== map) {
             playerFaceMat.uniforms.map.value = map;
+          }
+        }
+
+        function updateIslandPalmBillboards() {
+          if (!islandPalmBillboards.length) return;
+          for (let pi = 0; pi < islandPalmBillboards.length; pi++) {
+            const mesh = islandPalmBillboards[pi];
+            if (!mesh || !mesh.position) continue;
+            const dx = camera.position.x - mesh.position.x;
+            const dz = camera.position.z - mesh.position.z;
+            mesh.rotation.y = Math.atan2(dx, dz);
           }
         }
 
@@ -2666,8 +4880,8 @@
             .filter((n) => n && n.gained && n.group)
             .sort((a, b) => (a.segmentIndex || 0) - (b.segmentIndex || 0));
           if (!gained.length) return;
-          const edgePad = Math.max(1.2, halfBoard * 0.06);
-          const lim = halfBoard - edgePad;
+          const edgePad = Math.max(1.2, mapBoardHalfExtent * 0.06);
+          const lim = mapBoardHalfExtent - edgePad;
           for (let i = 0; i < gained.length; i++) {
             const n = gained[i];
             const g = n.group;
@@ -2738,9 +4952,15 @@
           face.position.set(0, faceH * 0.5 - CHAR_HEAD_GROUND_PULL * NPC_SCALE, 0);
           g.add(face);
 
+          let npcSpawnPool = landSpawnList;
+          if (isIslandMap) {
+            npcSpawnPool = landSpawnList.filter(function (s) {
+              return s.kind === "drySand" || s.b === 1;
+            });
+          }
           const spot =
-            landSpawnList.length > 0
-              ? landSpawnList[(Math.random() * landSpawnList.length) | 0]
+            npcSpawnPool.length > 0
+              ? npcSpawnPool[(Math.random() * npcSpawnPool.length) | 0]
               : { x: 0, z: 0 };
           g.position.set(spot.x, NPC_DROP_START_Y, spot.z);
           g.rotation.y = Math.random() * Math.PI * 2;
@@ -2772,8 +4992,8 @@
             exprVY: 0,
             hopTimer: 1.5 + Math.random() * 2.5,
             prevTrailClimbing: false,
-            prevGX: x,
-            prevGZ: z,
+            prevGX: spot.x,
+            prevGZ: spot.z,
             scatterRX: 0,
             scatterRZ: 0,
             scatterGoalRX: 0,
@@ -3472,8 +5692,8 @@
               applyTapeDelayFromUi();
 
               // Small buffer: looper capture only (live monitoring bypasses this node — see updateRecordingAudioRoute).
-              // ScriptProcessor runs on the main thread in Chromium; a larger buffer reduces crackle.
-              recMonitor = ctx.createScriptProcessor(2048, 2, 2);
+              // ScriptProcessor runs on the main thread in Chromium; a larger buffer reduces crackle under load (island map).
+              recMonitor = ctx.createScriptProcessor(4096, 2, 2);
               recMonitor.onaudioprocess = function (e) {
                 const inL = e.inputBuffer.getChannelData(0);
                 const inR =
@@ -3525,6 +5745,8 @@
               } else {
                 stopLoopPlayback();
               }
+              _lastLooperDomSyncKey = looperDomSyncKey();
+              syncLooperRecordIndicator();
               return;
             }
 
@@ -3663,6 +5885,17 @@
            * Live monitoring: tapeFxOut (player + looper + delay) → destination (low latency).
            * While recording, a parallel muted ScriptProcessor tap captures into recChunks only.
            */
+          let _lastLooperDomSyncKey = "";
+          function looperDomSyncKey() {
+            return [
+              looperRecording ? 1 : 0,
+              looperArmed ? 1 : 0,
+              overdubActive ? 1 : 0,
+              overdubArmed ? 1 : 0,
+              loopPlaying ? 1 : 0,
+              loopBuffer ? 1 : 0
+            ].join();
+          }
           function updateRecordingAudioRoute() {
             try {
               if (!ctx || !tapeFxOut || !recMonitor) return;
@@ -3678,7 +5911,11 @@
                 recMonitor.connect(ctx.destination);
               }
             } finally {
-              syncLooperRecordIndicator();
+              const k = looperDomSyncKey();
+              if (k !== _lastLooperDomSyncKey) {
+                _lastLooperDomSyncKey = k;
+                syncLooperRecordIndicator();
+              }
             }
           }
 
@@ -4396,24 +6633,29 @@
 
             // If not gained yet, it falls and idles until the player gets close.
             if (!n.gained) {
-              const gy = sampleSurfaceY(g.position.x, g.position.z);
-              if (gy != null) {
-                const feetY = g.position.y - (0.18 * CHARACTER_SCALE * NPC_SCALE);
-                if (feetY > gy + 0.12 || n.vY > 0) {
-                  n.vY += gravity * dt;
-                  g.position.y += n.vY * dt;
-                  const fy2 = g.position.y - (0.18 * CHARACTER_SCALE * NPC_SCALE);
-                  if (fy2 < gy && n.vY < 0) {
-                    g.position.y = gy + (0.18 * CHARACTER_SCALE * NPC_SCALE);
+              const segHalfH0 = 0.18 * CHARACTER_SCALE * NPC_SCALE;
+              if (applyNpcSwimStep(g, n, dt, segHalfH0)) {
+                // Water column: buoyancy + optional seabed / surface clamp (Minecraft-style foundation).
+              } else {
+                const gy = sampleSurfaceY(g.position.x, g.position.z);
+                if (gy != null) {
+                  const feetY = g.position.y - segHalfH0;
+                  if (feetY > gy + 0.12 || n.vY > 0) {
+                    n.vY += gravity * dt;
+                    g.position.y += n.vY * dt;
+                    const fy2 = g.position.y - segHalfH0;
+                    if (fy2 < gy && n.vY < 0) {
+                      g.position.y = gy + segHalfH0;
+                      n.vY = 0;
+                    }
+                  } else {
+                    g.position.y = gy + segHalfH0;
                     n.vY = 0;
                   }
                 } else {
-                  g.position.y = gy + (0.18 * CHARACTER_SCALE * NPC_SCALE);
-                  n.vY = 0;
+                  n.vY += gravity * dt;
+                  g.position.y += n.vY * dt;
                 }
-              } else {
-                n.vY += gravity * dt;
-                g.position.y += n.vY * dt;
               }
 
               const dx = player.position.x - g.position.x;
@@ -5232,34 +7474,6 @@
           return hits[0];
         }
 
-        const downRaycaster = new THREE.Raycaster();
-        const downRayOrigin = new THREE.Vector3();
-        const downRayDir = new THREE.Vector3(0, -1, 0);
-        function sampleSurfaceY(x, z) {
-          downRayOrigin.set(x, 220, z);
-          downRaycaster.set(downRayOrigin, downRayDir);
-          const hits = downRaycaster.intersectObjects(groundPickables, false);
-          return hits.length ? hits[0].point.y : null;
-        }
-
-        function raycastDownSurface(x, z, outPoint, outNormal) {
-          downRayOrigin.set(x, 220, z);
-          downRaycaster.set(downRayOrigin, downRayDir);
-          const hits = downRaycaster.intersectObjects(shadowPickables, false);
-          if (!hits.length) {
-            return false;
-          }
-          const hit = hits[0];
-          outPoint.copy(hit.point);
-          if (hit.face) {
-            outNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
-          } else {
-            outNormal.set(0, 1, 0);
-          }
-          outNormal.normalize();
-          return true;
-        }
-
         function updatePlayerShadow() {
           if (!playerShadow) return;
           const px = player.position.x;
@@ -5426,9 +7640,14 @@
         }
 
         function tryJump() {
+          const feetY = player.position.y - playerHalfHeight;
+          if (entitySwimmingActive(player.position.x, player.position.z, feetY)) {
+            verticalVelocity += SWIM_SPACE_IMPULSE;
+            verticalVelocity = Math.min(SWIM_MAX_UP, verticalVelocity);
+            return;
+          }
           const groundY = sampleSurfaceY(player.position.x, player.position.z);
           if (groundY == null) return;
-          const feetY = player.position.y - playerHalfHeight;
           if (feetY <= groundY + 0.18 && verticalVelocity <= 0.55) {
             verticalVelocity = jumpSpeed;
             playJumpBoing(0.6);
@@ -5457,8 +7676,32 @@
         }
 
         function updatePlayerVertical(dt) {
-          const groundY = sampleSurfaceY(player.position.x, player.position.z);
           const feetY = player.position.y - playerHalfHeight;
+          if (entitySwimmingActive(player.position.x, player.position.z, feetY)) {
+            const solidGy = sampleSolidGroundY(player.position.x, player.position.z);
+            const surfaceY = SWIM_WATER_SURFACE_Y;
+            const targetFeet = surfaceY + SWIM_SURFACE_FEET_TARGET;
+            verticalVelocity += SWIM_GRAVITY * dt;
+            verticalVelocity += SWIM_BUOY_K * (targetFeet - feetY) * dt;
+            verticalVelocity *= SWIM_DRAG_V;
+            verticalVelocity = THREE.MathUtils.clamp(verticalVelocity, SWIM_MAX_DOWN, SWIM_MAX_UP);
+            player.position.y += verticalVelocity * dt;
+            noGroundTime = 0;
+            fallCamActive = false;
+            let fySw = player.position.y - playerHalfHeight;
+            if (solidGy != null && fySw < solidGy + 0.09 && verticalVelocity <= 0.45) {
+              player.position.y = solidGy + playerHalfHeight;
+              verticalVelocity = 0;
+            }
+            fySw = player.position.y - playerHalfHeight;
+            if (fySw > surfaceY + SWIM_FEET_MAX_ABOVE_SURFACE) {
+              player.position.y = surfaceY + SWIM_FEET_MAX_ABOVE_SURFACE + playerHalfHeight;
+              verticalVelocity = Math.min(0, verticalVelocity) * 0.45;
+            }
+            return;
+          }
+
+          let groundY = sampleSurfaceY(player.position.x, player.position.z);
           if (groundY != null) {
             const delta = feetY - groundY;
             if (delta <= 0.14 && verticalVelocity <= 0) {
@@ -5494,11 +7737,10 @@
           }
           verticalVelocity += gravity * dt;
           player.position.y += verticalVelocity * dt;
-          const gy = sampleSurfaceY(player.position.x, player.position.z);
-          if (gy != null) {
+          if (groundY != null) {
             const fy = player.position.y - playerHalfHeight;
-            if (fy < gy && verticalVelocity < 0) {
-              player.position.y = gy + playerHalfHeight;
+            if (fy < groundY && verticalVelocity < 0) {
+              player.position.y = groundY + playerHalfHeight;
               verticalVelocity = 0;
               noGroundTime = 0;
               fallCamActive = false;
@@ -5516,7 +7758,7 @@
             }
           }
           tryResolvePropLanding();
-          if (gy == null) {
+          if (groundY == null) {
             noGroundTime += dt;
             if (noGroundTime > 0.4 && !fallCamActive) {
               fallCamActive = true;
@@ -5836,8 +8078,21 @@
 
         function updatePlayerMovement(dt) {
           // billboard-demo-minimal.html: screen-relative move from camera→player on the ground plane.
-          forward.subVectors(player.position, camera.position).setY(0).normalize();
-          right.crossVectors(forward, worldUp).normalize();
+          forward.subVectors(player.position, camera.position).setY(0);
+          if (forward.lengthSq() < 1e-10) {
+            forward.set(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
+          } else {
+            forward.normalize();
+          }
+          right.crossVectors(forward, worldUp);
+          if (right.lengthSq() < 1e-10) {
+            right.set(-forward.z, 0, forward.x);
+          }
+          if (right.lengthSq() < 1e-10) {
+            right.set(1, 0, 0);
+          } else {
+            right.normalize();
+          }
 
           let x = 0,
             y = 0;
@@ -5859,9 +8114,15 @@
           }
 
           const speed = (keys.has("ShiftLeft") || keys.has("ShiftRight")) ? 14 : 8;
+          const swimFeetCheck = player.position.y - playerHalfHeight;
+          const swimMoveMul = entitySwimmingActive(player.position.x, player.position.z, swimFeetCheck)
+            ? 0.6
+            : 1;
           const PLAYER_RADIUS = 0.45 * CHARACTER_SCALE;
-          const BOARD_EDGE = halfBoard;
+          const BOARD_EDGE = mapBoardHalfExtent;
           const WALL_PUSH = PLAYER_RADIUS + 0.002;
+          /** Keep re-entry snaps slightly *inside* the finite floor mesh so raycasts still hit ground. */
+          const REENTRY_INSET = Math.min(WALL_PUSH + 0.04, BOARD_EDGE * 0.98);
 
           function applyOneWayCliffCollision(prevX, prevZ, nextX, nextZ) {
             const wasInside = Math.abs(prevX) <= BOARD_EDGE && Math.abs(prevZ) <= BOARD_EDGE;
@@ -5869,18 +8130,19 @@
               // Allow leaving the board (jump/fall off the edge).
               return { x: nextX, z: nextZ };
             }
-            // If we're already outside, prevent re-entering by walking through the cliff wall.
-            if (prevX > BOARD_EDGE && nextX < BOARD_EDGE) nextX = BOARD_EDGE + WALL_PUSH;
-            if (prevX < -BOARD_EDGE && nextX > -BOARD_EDGE) nextX = -BOARD_EDGE - WALL_PUSH;
-            if (prevZ > BOARD_EDGE && nextZ < BOARD_EDGE) nextZ = BOARD_EDGE + WALL_PUSH;
-            if (prevZ < -BOARD_EDGE && nextZ > -BOARD_EDGE) nextZ = -BOARD_EDGE - WALL_PUSH;
+            // Outside the rim: block crossing back through the cliff plane into the interior,
+            // but leave the player just inside the deck (not past ±BOARD_EDGE) so ground picks stay valid.
+            if (prevX > BOARD_EDGE && nextX < BOARD_EDGE) nextX = BOARD_EDGE - REENTRY_INSET;
+            if (prevX < -BOARD_EDGE && nextX > -BOARD_EDGE) nextX = -BOARD_EDGE + REENTRY_INSET;
+            if (prevZ > BOARD_EDGE && nextZ < BOARD_EDGE) nextZ = BOARD_EDGE - REENTRY_INSET;
+            if (prevZ < -BOARD_EDGE && nextZ > -BOARD_EDGE) nextZ = -BOARD_EDGE + REENTRY_INSET;
             return { x: nextX, z: nextZ };
           }
 
           if (hasKeyboardInput) {
             const prevX = player.position.x;
             const prevZ = player.position.z;
-            player.position.addScaledVector(panDir, speed * dt);
+            player.position.addScaledVector(panDir, speed * swimMoveMul * dt);
             const fixed = applyOneWayCliffCollision(prevX, prevZ, player.position.x, player.position.z);
             player.position.x = fixed.x;
             player.position.z = fixed.z;
@@ -5915,7 +8177,7 @@
           playerLastPanDir.copy(panDir);
           moveYaw = Math.atan2(panDir.x, panDir.z);
           player.rotation.y = moveYaw;
-          const step = speed * dt;
+          const step = speed * swimMoveMul * dt;
           if (step >= remainingDist) {
             const targetGroundY = sampleSurfaceY(clickTarget.x, clickTarget.z);
             const landY = (targetGroundY == null ? player.position.y : targetGroundY + playerHalfHeight);
@@ -5942,6 +8204,62 @@
           const dt = Math.min(clock.getDelta(), 0.05);
           flareTime += dt;
           cloudMat.uniforms.uTime.value += dt;
+          if (oceanWaterMat) oceanWaterMat.uniforms.uTime.value += dt;
+          if (tesseractGlassMat && tesseractGlassMat.uniforms && tesseractGlassMat.uniforms.uTime) {
+            tesseractGlassMat.uniforms.uTime.value += dt;
+          }
+          if (tesseractFractal && tesseractFractal.group) {
+            const g = tesseractFractal.group;
+            g.rotation.y += dt * 0.18;
+            g.rotation.x = 0.22 + Math.sin(flareTime * 0.25) * 0.08;
+            g.rotation.z = Math.cos(flareTime * 0.22) * 0.06;
+          }
+          if (tesseractDragon && tesseractDragon.inst) {
+            const D = tesseractDragon;
+            D.phase += dt;
+            const t = D.phase * D.speed;
+            const o = tesseractDragonTmp.obj;
+            const c = tesseractDragonTmp.col;
+            const up = new THREE.Vector3(0, 1, 0);
+            let prevX = 0;
+            let prevY = 0;
+            let prevZ = 0;
+            let hasPrev = false;
+            for (let i = 0; i < D.segCount; i++) {
+              const u = i / Math.max(1, D.segCount - 1);
+              // Head leads; tail lags.
+              const tt = t - u * 5.2;
+              const ang = tt * 0.85 + Math.sin(tt * 0.33) * 0.35;
+              const rr = D.baseR + Math.sin(tt * 1.3) * 1.4;
+              const wob = Math.sin(tt * 2.1 + u * 6.0) * D.snakeAmp;
+              const x = D.center.x + Math.cos(ang) * rr + Math.cos(ang + Math.PI / 2) * wob;
+              const z = D.center.z + Math.sin(ang) * rr + Math.sin(ang + Math.PI / 2) * wob;
+              const y = D.center.y + Math.sin(tt * 1.7 + u * 9.0) * D.yAmp + Math.cos(tt * 0.55) * 0.35;
+              o.position.set(x, y, z);
+
+              // Orient each segment to face the previous one (so it reads as a coherent snake).
+              if (hasPrev) {
+                o.lookAt(prevX, prevY, prevZ);
+                o.rotateOnAxis(up, Math.PI);
+              } else {
+                o.rotation.set(0, ang + Math.PI / 2, 0);
+              }
+              const s = (1.0 - u) * 0.65 + 0.55;
+              const headBoost = i < 6 ? 1.0 + (6 - i) * 0.15 : 1.0;
+              o.scale.setScalar(s * headBoost * (i === 0 ? D.headScale : 1.0));
+              o.updateMatrix();
+              D.inst.setMatrixAt(i, o.matrix);
+              // Rainbow: hue flows along body + time.
+              c.setHSL((t * 0.12 + u * 1.1) % 1, 1.0, 0.62);
+              D.inst.setColorAt(i, c);
+              prevX = x;
+              prevY = y;
+              prevZ = z;
+              hasPrev = true;
+            }
+            D.inst.instanceMatrix.needsUpdate = true;
+            if (D.inst.instanceColor) D.inst.instanceColor.needsUpdate = true;
+          }
           // Keep sky dome centered on camera.
           cloudDome.position.copy(camera.position);
           stars.position.copy(camera.position);
@@ -5951,10 +8269,13 @@
           updatePlayerShadow();
           updateCamera(dt);
           updateCharacterBillboard();
+          updateIslandPalmBillboards();
           updatePlayerHands(dt);
           npcSpawnTimer += dt;
-          while (npcSpawnTimer >= NPC_SPAWN_EVERY) {
+          let npcSpawnBurst = 0;
+          while (npcSpawnTimer >= NPC_SPAWN_EVERY && npcSpawnBurst < 2) {
             npcSpawnTimer -= NPC_SPAWN_EVERY;
+            npcSpawnBurst++;
             spawnNpc();
           }
           updateNpcs(dt);
@@ -5986,6 +8307,36 @@
             setPropEnabled("ball", on);
           }
         );
+
+        const hudMapCycleBtn = document.getElementById("hud-map-cycle");
+        if (hudMapCycleBtn) {
+          const hudRoot = document.getElementById("hud");
+          function pickRandomMapCycleButtonColor() {
+            const h = Math.random() * 360;
+            const s = 68 + Math.random() * 22;
+            const l = 44 + Math.random() * 16;
+            hudMapCycleBtn.style.background =
+              "hsl(" + h.toFixed(1) + "," + s.toFixed(1) + "%," + l.toFixed(1) + "%)";
+            hudMapCycleBtn.style.boxShadow =
+              "0 0 0 1px rgba(0,0,0,0.24), inset 0 1px 0 rgba(255,255,255,0.38)";
+          }
+          pickRandomMapCycleButtonColor();
+          if (hudRoot) {
+            hudRoot.addEventListener("hud-opened", pickRandomMapCycleButtonColor);
+          }
+          hudMapCycleBtn.addEventListener("click", function () {
+            const cur = readMapMode();
+            let ix = MAP_MODE_IDS.indexOf(cur);
+            if (ix < 0) {
+              ix = 0;
+            }
+            const next = MAP_MODE_IDS[(ix + 1) % MAP_MODE_IDS.length];
+            try {
+              localStorage.setItem(LS_MAP_MODE, next);
+            } catch (eMap) {}
+            location.reload();
+          });
+        }
 
         addEventListener("resize", () => {
           camera.aspect = innerWidth / innerHeight;
