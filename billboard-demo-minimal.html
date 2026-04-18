@@ -4776,7 +4776,7 @@
 
         // --- Board waddle-bot (silly cartoony robot, procedural mesh + wander) ---
         const BOARD_WADDLE_EDGE = 8;
-        const BOARD_WADDLE_RUN_SPEED = 8.2;
+        const BOARD_WADDLE_RUN_SPEED = 1.65;
         const BOARD_WADDLE_TARGET_EPS = 2.8;
         const BOARD_WADDLE_BODY_Y = 0.02;
         const _waddleScratch = {
@@ -5110,7 +5110,7 @@
           const moveLen = Math.hypot(_waddleScratch.toTarget.x * sp, _waddleScratch.toTarget.z * sp);
           const moving = moveLen > 0.0004;
           if (moving) {
-            dr.walkPhase += dt * (7.2 + moveLen * 320);
+            dr.walkPhase += dt * (2.35 + moveLen * 72);
           }
           const ph = dr.walkPhase;
 
