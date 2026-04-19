@@ -602,7 +602,7 @@
       function initGame() {
         const LS_MAP_MODE = "worldTilesMapMode";
         /** HUD cycle order; extend alongside readMapMode() and world init when adding maps. */
-        const MAP_MODE_IDS = ["island", "board", "tesseract"];
+        const MAP_MODE_IDS = ["island", "board", "tesseract", "mesa", "aurora", "reef"];
         function readMapMode() {
           try {
             const q = new URLSearchParams(String(location.search || ""));
@@ -619,6 +619,10 @@
         const useBoardMap = mapMode === "board";
         const useTesseractMap = mapMode === "tesseract";
         const isIslandMap = mapMode === "island";
+        const useMesaMap = mapMode === "mesa";
+        const useAuroraMap = mapMode === "aurora";
+        const useReefMap = mapMode === "reef";
+        const useArenaMap = useBoardMap || useMesaMap || useAuroraMap || useReefMap;
         try {
           const q = new URLSearchParams(String(location.search || ""));
           const u = q.get("map");
@@ -652,7 +656,12 @@
         }
         renderer.setSize(window.innerWidth, window.innerHeight);
         // Island: heavier shaders + merged terrain — cap DPR a bit lower to keep frame time stable (helps Web Audio / looper).
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, useBoardMap ? 2 : useTesseractMap ? 1.7 : 1.55));
+        renderer.setPixelRatio(
+          Math.min(
+            window.devicePixelRatio || 1,
+            useBoardMap ? 2 : useTesseractMap ? 1.7 : useArenaMap ? 1.78 : 1.55
+          )
+        );
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.toneMapping = THREE.NoToneMapping;
         renderer.toneMappingExposure = 1;
@@ -2643,7 +2652,246 @@
             // Diagonal toward the yellow pyramid (-cornerXZ,-cornerXZ); outside center spiral (~8m half-axis).
             tileWorldSpawn = { x: -26, z: -26 };
           })();
-        } else {
+        } else if (useMesaMap) {
+          (function buildMesaWorld() {
+            const half = 62;
+            mapBoardHalfExtent = half;
+            const sandMat = new THREE.MeshStandardMaterial({
+              color: 0xc97f54,
+              roughness: 0.9,
+              metalness: 0.02,
+              envMapIntensity: 0.35
+            });
+            const ground = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2, 1, 1), sandMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = GROUND_SURFACE_Y;
+            ground.receiveShadow = false;
+            ground.userData.tileKey = "mesa_ground";
+            ground.userData.solid = true;
+            scene.add(ground);
+            groundPickables.push(ground);
+            shadowPickables.push(ground);
+            const butteMat = new THREE.MeshStandardMaterial({
+              color: 0xa86f52,
+              roughness: 0.88,
+              metalness: 0.02,
+              envMapIntensity: 0.32
+            });
+            for (let mi = 0; mi < 5; mi++) {
+              const ang = (mi / 5) * Math.PI * 2 + 0.35;
+              const rr = 18 + (mi % 2) * 9;
+              const cx = Math.cos(ang) * rr;
+              const cz = Math.sin(ang) * rr;
+              const hh = 7.5 + (mi % 3) * 2.2;
+              const bw = 4.2 + mi * 0.35;
+              const butte = new THREE.Mesh(new THREE.BoxGeometry(bw, hh, bw * 0.9), butteMat);
+              butte.position.set(cx, GROUND_SURFACE_Y + hh * 0.5, cz);
+              scene.add(butte);
+              groundPickables.push(butte);
+              shadowPickables.push(butte);
+            }
+            const rockMat = new THREE.MeshStandardMaterial({
+              color: 0x6e4a38,
+              roughness: 0.91,
+              metalness: 0.02,
+              envMapIntensity: 0.28
+            });
+            for (let ri = 0; ri < 48; ri++) {
+              const x = (Math.random() * 2 - 1) * (half - 4);
+              const z = (Math.random() * 2 - 1) * (half - 4);
+              if (x * x + z * z < 40) continue;
+              const s = 0.3 + Math.random() * 0.85;
+              const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), rockMat);
+              rock.position.set(x, GROUND_SURFACE_Y + s * 0.42, z);
+              rock.rotation.set(Math.random() * 6.2, Math.random() * 6.2, Math.random() * 6.2);
+              scene.add(rock);
+              groundPickables.push(rock);
+              shadowPickables.push(rock);
+            }
+            for (let si = 0; si < 380; si++) {
+              landSpawnList.push({
+                x: (Math.random() * 2 - 1) * 52,
+                z: (Math.random() * 2 - 1) * 52,
+                b: 1,
+                ix: 0,
+                iz: 0
+              });
+            }
+            tileWorldSpawn = { x: 0, z: 16 };
+            const skyM = new THREE.Color(0xe8c4a8);
+            scene.background = skyM;
+            renderer.setClearColor(skyM, 1);
+            try {
+              renderer.domElement.style.background = "#" + skyM.getHexString();
+            } catch (eSkyM) {}
+          })();
+        } else if (useAuroraMap) {
+          (function buildAuroraWorld() {
+            const half = 62;
+            mapBoardHalfExtent = half;
+            const snowMat = new THREE.MeshStandardMaterial({
+              color: 0xdfe8f0,
+              roughness: 0.82,
+              metalness: 0.02,
+              envMapIntensity: 0.45
+            });
+            const ground = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2, 1, 1), snowMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = GROUND_SURFACE_Y;
+            ground.userData.tileKey = "aurora_ground";
+            ground.userData.solid = true;
+            scene.add(ground);
+            groundPickables.push(ground);
+            shadowPickables.push(ground);
+            const trunkMat = new THREE.MeshStandardMaterial({ color: 0x3a2818, roughness: 0.95 });
+            const pineMat = new THREE.MeshStandardMaterial({
+              color: 0x1c4a32,
+              roughness: 0.75,
+              envMapIntensity: 0.35
+            });
+            const coneGeo = new THREE.ConeGeometry(0.52, 1.15, 6);
+            const cylGeo = new THREE.CylinderGeometry(0.09, 0.11, 0.5, 6);
+            for (let ti = 0; ti < 38; ti++) {
+              const x = (Math.random() * 2 - 1) * (half - 5);
+              const z = (Math.random() * 2 - 1) * (half - 5);
+              const sc = 0.85 + Math.random() * 1.1;
+              const trunk = new THREE.Mesh(cylGeo, trunkMat);
+              trunk.position.set(x, GROUND_SURFACE_Y + 0.25 * sc, z);
+              trunk.scale.setScalar(sc);
+              const tree = new THREE.Mesh(coneGeo, pineMat);
+              tree.position.set(x, GROUND_SURFACE_Y + 0.52 * sc + 0.55 * sc, z);
+              tree.scale.setScalar(sc);
+              scene.add(trunk);
+              scene.add(tree);
+              groundPickables.push(trunk, tree);
+              shadowPickables.push(trunk, tree);
+            }
+            const band = new THREE.Mesh(
+              new THREE.PlaneGeometry(half * 2.4, 28, 1, 1),
+              new THREE.MeshBasicMaterial({
+                color: 0x55ffc8,
+                transparent: true,
+                opacity: 0.22,
+                depthWrite: false,
+                side: THREE.DoubleSide
+              })
+            );
+            band.position.set(0, 16, -half * 0.72);
+            band.rotation.x = -0.28;
+            scene.add(band);
+            const band2 = band.clone();
+            band2.material = band.material.clone();
+            band2.material.color.setHex(0x8866ff);
+            band2.material.opacity = 0.14;
+            band2.rotation.y = 0.35;
+            band2.position.x = 8;
+            scene.add(band2);
+            for (let si = 0; si < 380; si++) {
+              landSpawnList.push({
+                x: (Math.random() * 2 - 1) * 52,
+                z: (Math.random() * 2 - 1) * 52,
+                b: 1,
+                ix: 0,
+                iz: 0
+              });
+            }
+            tileWorldSpawn = { x: 0, z: 12 };
+            const skyA = new THREE.Color(0x0a1628);
+            scene.background = skyA;
+            renderer.setClearColor(skyA, 1);
+            try {
+              renderer.domElement.style.background = "#" + skyA.getHexString();
+            } catch (eSkyA) {}
+          })();
+        } else if (useReefMap) {
+          (function buildReefWorld() {
+            const half = 60;
+            mapBoardHalfExtent = half;
+            const sandMat = new THREE.MeshStandardMaterial({
+              color: 0xe9d4ae,
+              roughness: 0.86,
+              metalness: 0.02,
+              envMapIntensity: 0.42
+            });
+            const ground = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2, 1, 1), sandMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = GROUND_SURFACE_Y;
+            ground.userData.tileKey = "reef_ground";
+            ground.userData.solid = true;
+            scene.add(ground);
+            groundPickables.push(ground);
+            shadowPickables.push(ground);
+            function coralMat(hex) {
+              return new THREE.MeshStandardMaterial({
+                color: hex,
+                roughness: 0.55,
+                metalness: 0.06,
+                emissive: new THREE.Color(hex).multiplyScalar(0.12),
+                emissiveIntensity: 1,
+                envMapIntensity: 0.55
+              });
+            }
+            const mats = [coralMat(0xff6b6b), coralMat(0xb066ff), coralMat(0xffaa55)];
+            for (let ci = 0; ci < 55; ci++) {
+              const x = (Math.random() * 2 - 1) * (half - 4);
+              const z = (Math.random() * 2 - 1) * (half - 4);
+              const g = 0.25 + Math.random() * 0.55;
+              const coral = new THREE.Mesh(new THREE.IcosahedronGeometry(g, 0), mats[ci % 3]);
+              coral.position.set(x, GROUND_SURFACE_Y + g * 0.55, z);
+              coral.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+              scene.add(coral);
+              groundPickables.push(coral);
+              shadowPickables.push(coral);
+            }
+            const waterRing = new THREE.Mesh(
+              new THREE.RingGeometry(half * 0.32, half * 0.96, 48),
+              new THREE.MeshStandardMaterial({
+                color: 0x34b0d0,
+                roughness: 0.15,
+                metalness: 0.04,
+                transparent: true,
+                opacity: 0.55,
+                depthWrite: false
+              })
+            );
+            waterRing.rotation.x = -Math.PI / 2;
+            waterRing.position.set(0, GROUND_SURFACE_Y + 0.03, 0);
+            scene.add(waterRing);
+            const domeMat = new THREE.MeshStandardMaterial({
+              color: 0xc8eefc,
+              roughness: 0.12,
+              metalness: 0.05,
+              transparent: true,
+              opacity: 0.28,
+              side: THREE.DoubleSide,
+              depthWrite: false,
+              envMapIntensity: 0.75
+            });
+            const dome = new THREE.Mesh(
+              new THREE.SphereGeometry(5.2, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.5),
+              domeMat
+            );
+            dome.position.set(-12, GROUND_SURFACE_Y, -10);
+            scene.add(dome);
+            shadowPickables.push(dome);
+            for (let si = 0; si < 380; si++) {
+              landSpawnList.push({
+                x: (Math.random() * 2 - 1) * 50,
+                z: (Math.random() * 2 - 1) * 50,
+                b: 1,
+                ix: 0,
+                iz: 0
+              });
+            }
+            tileWorldSpawn = { x: 6, z: 8 };
+            const skyR = new THREE.Color(0x5fb8e0);
+            scene.background = skyR;
+            renderer.setClearColor(skyR, 1);
+            try {
+              renderer.domElement.style.background = "#" + skyR.getHexString();
+            } catch (eSkyR) {}
+          })();
+        } else if (useTesseractMap) {
           (function buildTesseractWorld() {
             // Greek-style white marble temple, courtyard, central pond; white/gold + red/blue/yellow gem accents.
             mapBoardHalfExtent = 92;
