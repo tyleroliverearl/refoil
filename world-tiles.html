@@ -5192,6 +5192,8 @@
         let nocturneDrumStep = 0;
         let nocturneHarmonyT = 0;
         let nocturneEnsemblePhrase = 0;
+        /** First chord-stab phrase nudges tape-delay wet so stabs use the effect without fighting the slider forever. */
+        let noctStabDelayPrimed = false;
         const NPC_SCALE = 0.7;
         const NPC_TRIGGER_DIST = CHARACTER_FACE_H * 1.2; // slightly larger pickup radius
         const NPC_FOLLOW_DIST = CHARACTER_FACE_H * 0.5; // "half-character distance"
@@ -5392,9 +5394,10 @@
         function ensureNocturneComposerNpc() {
           if (!useNocturneMap || !texCharFront) return;
           const band = [
-            { role: "bass", x: -6.2, z: 2.4, hue: 0.86, ry: Math.PI * 0.38 },
-            { role: "synth", x: 1.4, z: -3.0, hue: 0.58, ry: Math.PI * 0.92 },
-            { role: "drums", x: 5.8, z: 2.5, hue: 0.11, ry: Math.PI * 1.15 }
+            { role: "bass", x: -6.4, z: 2.55, hue: 0.86, ry: Math.PI * 0.38 },
+            { role: "synth", x: 1.35, z: -3.05, hue: 0.58, ry: Math.PI * 0.92 },
+            { role: "drums", x: 6.0, z: 2.45, hue: 0.11, ry: Math.PI * 1.15 },
+            { role: "pads", x: -1.85, z: -4.85, hue: 0.39, ry: Math.PI * 0.72 }
           ];
           for (let bi = 0; bi < band.length; bi++) {
             const spec = band[bi];
@@ -5460,8 +5463,9 @@
               noctAnchorX: spec.x,
               noctAnchorZ: spec.z,
               noctAnchorRy: spec.ry,
-              noctJumpVy: 0,
-              noctOffY: 0,
+              noctDriftT: bi * 1.15,
+              noctDriftKickX: 0,
+              noctDriftKickZ: 0,
               noctDanceT: bi * 2.07,
               noctPlayExcite: 0
             });
@@ -5653,6 +5657,8 @@
           let tapeDry = null;
           let tapeWet = null;
           let tapeFxOut = null;
+          /** Nocturne chord stabs → tape delay bus (player/looper use same `tapeDelayIn`). */
+          let noctStabSend = null;
           /** 0 = delay off (dry only); 1 = long delay + feedback. */
           let tapeDelayNorm = 0;
           const voices = new Map();
@@ -6143,6 +6149,10 @@
             } catch (e) {}
           }
 
+          function getTapeDelayNorm() {
+            return tapeDelayNorm;
+          }
+
           function setTapeDelayNorm(n) {
             tapeDelayNorm = Math.max(0, Math.min(1, n));
             ensure();
@@ -6168,7 +6178,7 @@
               playerMaster = ctx.createGain();
               playerMaster.gain.value = 0.104;
               npcMaster = ctx.createGain();
-              npcMaster.gain.value = 0.095;
+              npcMaster.gain.value = 0.112;
 
               // Shorter IR than before: long convolvers are very expensive when many voices hit the wet bus.
               const irLen = Math.floor(ctx.sampleRate * 0.62);
@@ -6220,6 +6230,9 @@
               tapeFxOut = ctx.createGain();
               tapeFxOut.gain.value = 1;
               playerMaster.connect(tapeDelayIn);
+              noctStabSend = ctx.createGain();
+              noctStabSend.gain.value = 0.58;
+              noctStabSend.connect(tapeDelayIn);
               tapeDelayIn.connect(tapeDry);
               tapeDry.connect(tapeFxOut);
               tapeDelayIn.connect(tapeDelayMerge);
@@ -6711,10 +6724,13 @@
 
             const isNpcBell = voiceId.startsWith("npcBell");
             const isNoctLead = voiceId.startsWith("noctLead_");
+            const isNoctBass = voiceId.startsWith("bassNoctPsy_");
+            const isNoctStab = voiceId.startsWith("noctStab_");
             if (isNpcBell) trimVoicesByPrefix("npcBell_", 12);
+            else if (isNoctBass) trimVoicesByPrefix("bassNoctPsy_", 10);
             else if (voiceId.startsWith("bass_")) trimVoicesByPrefix("bass_", 10);
-            else if (voiceId.startsWith("bassNoctPsy_")) trimVoicesByPrefix("bassNoctPsy_", 10);
             else if (isNoctLead) trimVoicesByPrefix("noctLead_", 10);
+            else if (isNoctStab) trimVoicesByPrefix("noctStab_", 18);
             else if (voiceId.startsWith("noctSyn_")) trimVoicesByPrefix("noctSyn_", 10);
 
             const t = audio.currentTime;
@@ -6773,28 +6789,77 @@
               carrier.connect(ampGain);
               ampGain.connect(npcDry);
               ampGain.connect(npcConv);
+            } else if (isNoctBass) {
+              // Pocket bass on NPC bus (same path as glass lead) — sub + mild FM triangle, audible under drums.
+              const MOD_RATIO = 1.0;
+              carrier.type = "triangle";
+              mod.type = "sine";
+              carrier.frequency.setValueAtTime(fc, t);
+              mod.frequency.setValueAtTime(fc * MOD_RATIO, t);
+              carrier.detune.setValueAtTime((Math.random() - 0.5) * 8, t);
+              mod.detune.setValueAtTime((Math.random() - 0.5) * 6, t);
+              const indexPeak = Math.min(46, Math.max(11, fc * 0.1));
+              const indexSus = Math.min(19, Math.max(5, fc * 0.038));
+              modGain.gain.setValueAtTime(0.0001, t);
+              modGain.gain.exponentialRampToValueAtTime(indexPeak, t + 0.01);
+              modGain.gain.exponentialRampToValueAtTime(indexSus, t + 0.088);
+              mod.connect(modGain);
+              modGain.connect(carrier.frequency);
+              ampGain.gain.setValueAtTime(0.0001, t);
+              ampGain.gain.exponentialRampToValueAtTime(0.52, t + 0.0035);
+              ampGain.gain.exponentialRampToValueAtTime(0.38, t + 0.055);
+              ampGain.gain.exponentialRampToValueAtTime(0.26, t + 0.34);
+              sub = audio.createOscillator();
+              sub.type = "sine";
+              sub.frequency.setValueAtTime(Math.max(32, fc * 0.5), t);
+              subGain = audio.createGain();
+              subGain.gain.setValueAtTime(0.0001, t);
+              subGain.gain.exponentialRampToValueAtTime(0.42, t + 0.006);
+              subGain.gain.exponentialRampToValueAtTime(0.28, t + 0.09);
+              filt = audio.createBiquadFilter();
+              filt.type = "lowpass";
+              filt.Q.setValueAtTime(0.82, t);
+              filt.frequency.setValueAtTime(2400, t);
+              filt.frequency.exponentialRampToValueAtTime(380, t + 0.14);
+              carrier.connect(ampGain);
+              ampGain.connect(filt);
+              filt.connect(npcDry);
+              sub.connect(subGain);
+              subGain.connect(npcDry);
+            } else if (isNoctStab) {
+              const send = noctStabSend;
+              carrier.type = "triangle";
+              carrier.frequency.setValueAtTime(fc, t);
+              carrier.detune.setValueAtTime((Math.random() - 0.5) * 10, t);
+              modGain.gain.setValueAtTime(0, t);
+              mod.frequency.setValueAtTime(fc, t);
+              mod.connect(modGain);
+              ampGain.gain.setValueAtTime(0.0001, t);
+              ampGain.gain.exponentialRampToValueAtTime(0.31, t + 0.002);
+              ampGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+              carrier.connect(ampGain);
+              if (send) ampGain.connect(send);
+              else {
+                ampGain.connect(npcDry);
+                ampGain.connect(npcConv);
+              }
             } else {
               const P = playerInst;
-              const isPsyBass = voiceId.startsWith("bassNoctPsy_");
-              // Player bass: acid-style. Nocturne NPC bass: rounder FM + less drive so the glass lead cuts through.
               lowWarm = null;
-              const MOD_RATIO = isPsyBass ? 2.22 : P.modRatio;
-              carrier.type = isPsyBass ? "triangle" : P.carrierType;
-              mod.type = isPsyBass ? "sine" : P.modType;
+              const MOD_RATIO = P.modRatio;
+              carrier.type = P.carrierType;
+              mod.type = P.modType;
               carrier.frequency.setValueAtTime(fc, t);
               mod.frequency.setValueAtTime(fc * MOD_RATIO, t);
               const dtc =
                 P.detuneCentsRange != null && P.detuneCentsRange >= 0 ? P.detuneCentsRange : 4.5;
-              const detMul = isPsyBass ? 1.05 : 1;
-              carrier.detune.setValueAtTime((Math.random() - 0.5) * dtc * detMul, t);
-              mod.detune.setValueAtTime((Math.random() - 0.5) * dtc * detMul, t);
+              carrier.detune.setValueAtTime((Math.random() - 0.5) * dtc, t);
+              mod.detune.setValueAtTime((Math.random() - 0.5) * dtc, t);
 
               let indexPeak = Math.min(42, Math.max(6, fc * 0.058)) * P.indexScale;
               indexPeak = Math.min(55, Math.max(4, indexPeak));
-              if (isPsyBass) indexPeak = Math.min(36, indexPeak * 0.72);
               let indexSus = Math.min(16, Math.max(2.5, fc * 0.021)) * P.indexScale;
               indexSus = Math.min(22, Math.max(1.5, indexSus));
-              if (isPsyBass) indexSus = Math.min(12, indexSus * 0.78);
               modGain.gain.setValueAtTime(0.0001, t);
               modGain.gain.exponentialRampToValueAtTime(indexPeak, t + 0.011);
               modGain.gain.exponentialRampToValueAtTime(indexSus, t + 0.095);
@@ -6802,11 +6867,10 @@
               mod.connect(modGain);
               modGain.connect(carrier.frequency);
 
-              const psyLv = isPsyBass ? 0.58 : 1;
               ampGain.gain.setValueAtTime(0.0001, t);
-              ampGain.gain.exponentialRampToValueAtTime(0.5 * P.ampPeakScale * psyLv, t + 0.0035);
-              ampGain.gain.exponentialRampToValueAtTime(0.36 * P.ampSus1Scale * psyLv, t + isPsyBass ? 0.1 : 0.07);
-              ampGain.gain.exponentialRampToValueAtTime(0.14 * P.ampSus2Scale * psyLv, t + isPsyBass ? 0.48 : 0.32);
+              ampGain.gain.exponentialRampToValueAtTime(0.5 * P.ampPeakScale, t + 0.0035);
+              ampGain.gain.exponentialRampToValueAtTime(0.36 * P.ampSus1Scale, t + 0.07);
+              ampGain.gain.exponentialRampToValueAtTime(0.14 * P.ampSus2Scale, t + 0.32);
 
               sub = audio.createOscillator();
               sub.type = "sine";
@@ -6814,28 +6878,24 @@
               sub.detune.setValueAtTime((Math.random() - 0.5) * Math.min(18, dtc * 0.75), t);
               subGain = audio.createGain();
               subGain.gain.setValueAtTime(0.0001, t);
-              const subMul = isPsyBass ? 0.52 : 1;
-              subGain.gain.exponentialRampToValueAtTime(0.14 * P.subScale * subMul, t + 0.012);
-              subGain.gain.exponentialRampToValueAtTime(0.075 * P.subScale * subMul, t + 0.085);
+              subGain.gain.exponentialRampToValueAtTime(0.14 * P.subScale, t + 0.012);
+              subGain.gain.exponentialRampToValueAtTime(0.075 * P.subScale, t + 0.085);
 
               filt = audio.createBiquadFilter();
               filt.type = "lowpass";
               const Qpk = Math.min(22, Math.max(6.5, Math.min(17.5, Math.max(9.2, 11.8 + fc * 0.0075)) * P.qScale));
-              filt.Q.setValueAtTime(isPsyBass ? Qpk * 0.68 : Qpk, t);
+              filt.Q.setValueAtTime(Qpk, t);
               const fOpenBase = Math.min(10400, fc * 24 + 720) * P.fOpenScale;
-              const fOpen = Math.min(12000, isPsyBass ? fOpenBase * 0.55 : fOpenBase);
+              const fOpen = Math.min(12000, fOpenBase);
               const fSus = Math.max(80, Math.min(720, Math.max(105, Math.min(620, fc * 1.02 + 88)) * P.fSusScale));
               filt.frequency.setValueAtTime(fOpen, t);
-              filt.frequency.exponentialRampToValueAtTime(Math.max(fSus * 1.08, 140), t + isPsyBass ? 0.14 : 0.078);
-              filt.frequency.exponentialRampToValueAtTime(fSus * (isPsyBass ? 0.88 : 1), t + isPsyBass ? 0.42 : 0.24);
-              filt.frequency.exponentialRampToValueAtTime(
-                isPsyBass ? Math.max(72, fSus * 0.42) : fSus * 0.98,
-                t + isPsyBass ? 0.88 : 0.52
-              );
+              filt.frequency.exponentialRampToValueAtTime(Math.max(fSus * 1.08, 140), t + 0.078);
+              filt.frequency.exponentialRampToValueAtTime(fSus, t + 0.24);
+              filt.frequency.exponentialRampToValueAtTime(fSus * 0.98, t + 0.52);
 
               const drive = audio.createWaveShaper();
               const curve = new Float32Array(1024);
-              const driveAmt = isPsyBass ? P.driveAmt * 0.52 : P.driveAmt;
+              const driveAmt = P.driveAmt;
               for (let i = 0; i < 1024; i++) {
                 const x = (i / 1023) * 2 - 1;
                 curve[i] = Math.tanh(x * driveAmt);
@@ -6848,8 +6908,8 @@
               resPeak.frequency.setValueAtTime(peakF, t);
               resPeak.Q.setValueAtTime(P.peakQ, t);
               resPeak.gain.setValueAtTime(0, t);
-              resPeak.gain.linearRampToValueAtTime(P.peakGainAtk * (isPsyBass ? 0.22 : 1), t + 0.028);
-              resPeak.gain.linearRampToValueAtTime(P.peakGainSus * (isPsyBass ? 0.18 : 1), t + 0.1);
+              resPeak.gain.linearRampToValueAtTime(P.peakGainAtk, t + 0.028);
+              resPeak.gain.linearRampToValueAtTime(P.peakGainSus, t + 0.1);
 
               const dL = audio.createDelay(0.02);
               const dR = audio.createDelay(0.02);
@@ -6877,30 +6937,23 @@
               gR.connect(merger, 0, 1);
               merger.connect(outGain);
               outGain.connect(playerDry);
-              if (isPsyBass) outGain.gain.value = P.outGain * 0.72;
             }
 
             let noctVib = null;
-            if (!isNpcBell && !isNoctLead && voiceId.startsWith("bassNoctPsy_")) {
-              noctVib = audio.createOscillator();
-              noctVib.type = "sine";
-              noctVib.frequency.setValueAtTime(3.05 + (fc % 55) * 0.035, t);
-              const vg = audio.createGain();
-              vg.gain.value = 11;
-              noctVib.connect(vg);
-              vg.connect(carrier.detune);
-              noctVib.start(t);
-            }
 
             carrier.start(t);
             mod.start(t);
             if (sub) sub.start(t);
 
             let stopTimer = null;
-            if (isNpcBell || isNoctLead) {
+            if (isNpcBell || isNoctLead || isNoctBass) {
               stopTimer = setTimeout(() => {
                 voices.delete(voiceId);
               }, 2600);
+            } else if (isNoctStab) {
+              stopTimer = setTimeout(() => {
+                voices.delete(voiceId);
+              }, 900);
             }
 
             const vrec = { carrier, mod, ampGain, modGain, stopTimer, noctVib };
@@ -7073,7 +7126,8 @@
             triggerDrum,
             toggleOverdub,
             randomizePlayerInstrument,
-            setTapeDelayNorm
+            setTapeDelayNorm,
+            getTapeDelayNorm
           };
         })();
 
@@ -7185,15 +7239,17 @@
           }
         }
 
-        /** Bump the nocturne band NPC for `role` ("bass" | "synth" | "drums") so they jump/dance on their hits. */
+        /** Subtle motion cue for the nocturne band NPC (tiny bob / drift nudge on hits — not big jumps). */
         function pulseNocturneComposer(role, impulseY, exciteAdd) {
-          if (typeof impulseY !== "number") impulseY = 2.1;
-          if (typeof exciteAdd !== "number") exciteAdd = 0.3;
+          if (typeof impulseY !== "number") impulseY = 0.4;
+          if (typeof exciteAdd !== "number") exciteAdd = 0.09;
           for (let pi = 0; pi < npcs.length; pi++) {
             const nn = npcs[pi];
             if (nn.nocturneComposer && nn.nocturneRole === role) {
-              nn.noctJumpVy = (nn.noctJumpVy || 0) + impulseY;
-              nn.noctPlayExcite = Math.min(1.4, (nn.noctPlayExcite || 0) + exciteAdd);
+              nn.noctPlayExcite = Math.min(0.45, (nn.noctPlayExcite || 0) + exciteAdd * 0.32);
+              const k = Math.min(0.85, impulseY * 0.052);
+              nn.noctDriftKickX = (nn.noctDriftKickX || 0) + (Math.random() - 0.5) * k;
+              nn.noctDriftKickZ = (nn.noctDriftKickZ || 0) + (Math.random() - 0.5) * k;
               break;
             }
           }
@@ -7264,7 +7320,8 @@
               { c: "Digit6", t: 2760 },
               { c: "Digit3", t: 3420 },
               { c: "Digit8", t: 4140 }
-            ]
+            ],
+            stabCodes: ["Digit6", "Digit8", "Digit3"]
           },
           {
             bass: [
@@ -7290,7 +7347,8 @@
               { c: "Digit8", t: 2820 },
               { c: "Digit6", t: 3520 },
               { c: "Digit1", t: 4200 }
-            ]
+            ],
+            stabCodes: ["Digit4", "Digit6", "Digit1"]
           },
           {
             bass: [
@@ -7316,7 +7374,8 @@
               { c: "Digit5", t: 2900 },
               { c: "Digit8", t: 3580 },
               { c: "Digit3", t: 4260 }
-            ]
+            ],
+            stabCodes: ["Digit1", "Digit3", "Digit5"]
           },
           {
             bass: [
@@ -7342,7 +7401,8 @@
               { c: "Digit7", t: 2860 },
               { c: "Digit2", t: 3480 },
               { c: "Digit5", t: 4180 }
-            ]
+            ],
+            stabCodes: ["Digit5", "Digit7", "Digit2"]
           }
         ];
 
@@ -7370,7 +7430,7 @@
           }
         }
 
-        /** Longer legato bassline + `bassNoctPsy_` path (triangle FM + vibrato + slow filter dive). */
+        /** Nocturne bass arpeggio (`bassNoctPsy_`): dedicated pocket-bass voice on dry NPC bus. */
         function playNocturnePsyBassPhrase(phraseIx) {
           if (FmBellSynth.isEngineMuted()) return;
           const chord = NOCTURN_CHORD_CYCLE[phraseIx % NOCTURN_CHORD_CYCLE.length];
@@ -7412,6 +7472,43 @@
           }
         }
 
+        /** Triad stabs each phrase, routed into tape delay (`noctStabSend` → `tapeDelayIn`). */
+        function playNocturneChordStabs(phraseIx) {
+          if (FmBellSynth.isEngineMuted()) return;
+          if (!noctStabDelayPrimed) {
+            noctStabDelayPrimed = true;
+            try {
+              const cur = FmBellSynth.getTapeDelayNorm();
+              if (cur < 0.26) {
+                FmBellSynth.setTapeDelayNorm(0.32);
+                const el = document.getElementById("tm-tape-delay");
+                if (el) el.value = "32";
+              }
+            } catch (ePr) {}
+          }
+          const chord = NOCTURN_CHORD_CYCLE[phraseIx % NOCTURN_CHORD_CYCLE.length];
+          const codes = chord.stabCodes;
+          if (!codes || codes.length < 3) return;
+          const stabTimes = [85, 1960, 3720];
+          for (let s = 0; s < stabTimes.length; s++) {
+            const t0 = stabTimes[s];
+            setTimeout(function () {
+              pulseNocturneComposer("pads", 2.35, 0.36);
+            }, t0);
+            for (let v = 0; v < codes.length; v++) {
+              const id = "noctStab_" + phraseIx + "_" + s + "_" + v;
+              const fc = FM_BELL_HZ[codes[v]];
+              const dms = t0 + v * 22;
+              setTimeout(function () {
+                FmBellSynth.noteOn(id, fc);
+                setTimeout(function () {
+                  FmBellSynth.noteOff(id);
+                }, 290);
+              }, dms);
+            }
+          }
+        }
+
         function updateNpcs(dt) {
           if (!npcs.length) return;
           if (useNocturneMap) {
@@ -7432,6 +7529,7 @@
               } catch (eNe) {}
               playNocturnePsyBassPhrase(nocturneEnsemblePhrase);
               playNocturneLeadImprov(nocturneEnsemblePhrase);
+              playNocturneChordStabs(nocturneEnsemblePhrase);
             }
           }
           if (npcScatterJumpTimer > 0) {
@@ -7463,38 +7561,47 @@
               const gy = sampleSurfaceY(ax, az);
               const floorY = (gy != null ? gy : g.position.y - segHalfH) + segHalfH;
 
-              n.noctPlayExcite = (n.noctPlayExcite || 0) * Math.exp(-dt * 2.65);
-              n.noctDanceT = (n.noctDanceT || 0) + dt * (5.8 + n.noctPlayExcite * 11);
-              const ex = n.noctPlayExcite || 0;
-              const sway = 0.1 + ex * 0.26;
-              const bobX =
-                Math.sin(n.noctDanceT * 1.85) * sway +
-                Math.sin(n.noctDanceT * 3.05 + 0.7) * sway * 0.38;
-              const bobZ =
-                Math.cos(n.noctDanceT * 1.62) * sway * 0.95 +
-                Math.cos(n.noctDanceT * 2.75 + 1.1) * sway * 0.32;
+              n.noctPlayExcite = (n.noctPlayExcite || 0) * Math.exp(-dt * 1.2);
+              n.noctDriftT = (n.noctDriftT || 0) + dt;
+              const wp = n.wobblePhase || 0;
+              const wanderR = 0.58;
+              const dT = n.noctDriftT;
+              const mx =
+                Math.sin(dT * 0.56 + wp) * 0.52 +
+                Math.sin(dT * 0.2 + wp * 1.6) * 0.34 +
+                Math.sin(dT * 0.088 + 0.4) * 0.26;
+              const mz =
+                Math.cos(dT * 0.5 + wp * 0.85) * 0.5 +
+                Math.cos(dT * 0.17 + 1.1) * 0.32 +
+                Math.cos(dT * 0.076 + wp * 0.3) * 0.24;
+              let bobX = mx * wanderR;
+              let bobZ = mz * wanderR;
+              const kickD = Math.exp(-dt * 3.4);
+              n.noctDriftKickX = (n.noctDriftKickX || 0) * kickD;
+              n.noctDriftKickZ = (n.noctDriftKickZ || 0) * kickD;
+              bobX += n.noctDriftKickX;
+              bobZ += n.noctDriftKickZ;
 
-              n.noctJumpVy = (n.noctJumpVy || 0) + gravity * dt;
-              n.noctOffY = (n.noctOffY || 0) + n.noctJumpVy * dt;
-              if (n.noctOffY <= 0) {
-                n.noctOffY = 0;
-                if (n.noctJumpVy < 0) n.noctJumpVy = 0;
-              }
+              n.noctDanceT = (n.noctDanceT || 0) + dt * (1.45 + (n.noctPlayExcite || 0) * 0.75);
+              const ex = n.noctPlayExcite || 0;
+              const vertBob =
+                0.032 * Math.sin(n.noctDanceT * 1.68 + wp) +
+                0.017 * Math.sin(n.noctDanceT * 2.85 + wp * 0.55) +
+                ex * 0.024 * Math.sin(n.noctDanceT * 3.9);
 
               g.position.x = ax + bobX;
               g.position.z = az + bobZ;
-              g.position.y = floorY + (n.noctOffY || 0);
+              g.position.y = floorY + vertBob;
               const ry0 = n.noctAnchorRy != null ? n.noctAnchorRy : g.rotation.y;
               g.rotation.y =
-                ry0 +
-                Math.sin(n.noctDanceT * 2.35) * (0.11 + ex * 0.22) +
-                Math.sin(n.noctDanceT * 5.1 + 0.4) * 0.055 * ex;
+                ry0 + Math.sin(dT * 0.4 + wp) * 0.078 + Math.sin(dT * 0.67 + 0.9) * 0.038 + ex * 0.04 * Math.sin(dT * 1.1);
 
-              n.huePhase += dt * (0.28 + ex * 0.45);
+              n.huePhase += dt * (0.22 + ex * 0.18);
               let baseHue = 0.74;
               if (n.nocturneRole === "bass") baseHue = 0.82;
               else if (n.nocturneRole === "synth") baseHue = 0.57;
               else if (n.nocturneRole === "drums") baseHue = 0.11;
+              else if (n.nocturneRole === "pads") baseHue = 0.39;
               if (n.mat && n.mat.uniforms && n.mat.uniforms.uHueShift) {
                 n.mat.uniforms.uHueShift.value = mod1(baseHue + Math.sin(n.huePhase) * 0.055);
               }
