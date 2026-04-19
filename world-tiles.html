@@ -2765,30 +2765,66 @@
             groundPickables.push(ground);
             shadowPickables.push(ground);
             const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3328, roughness: 0.94 });
-            const canopyMat = new THREE.MeshStandardMaterial({
-              color: 0x123c28,
-              roughness: 0.78,
-              envMapIntensity: 0.32
+            const canopyMatMain = new THREE.MeshStandardMaterial({
+              color: 0x143f2c,
+              roughness: 0.82,
+              metalness: 0.02,
+              envMapIntensity: 0.34,
+              flatShading: true
             });
-            // Snow / tundra: sequoia-scale silhouettes — very tall tapered trunk, modest crown aloft.
+            const canopyMatLobe = new THREE.MeshStandardMaterial({
+              color: 0x0d3324,
+              roughness: 0.86,
+              metalness: 0.02,
+              envMapIntensity: 0.3,
+              flatShading: true
+            });
+            // Snow / tundra: sequoia trunk + **large layered foliage** — crown starts well down the trunk;
+            // shared geoms: tall main cone (height segments = lumpy silhouette) + smaller side cones for clumps.
             const trunkH = 8.65;
-            const crownH = 1.68;
-            const coneGeo = new THREE.ConeGeometry(0.46, crownH, 8, 1);
+            const crownMainH = 4.05;
+            const crownMainR = 1.22;
+            const crownMainGeo = new THREE.ConeGeometry(crownMainR, crownMainH, 11, 4);
+            const crownLobeGeo = new THREE.ConeGeometry(0.5, 1.72, 8, 2);
             const cylGeo = new THREE.CylinderGeometry(0.078, 0.152, trunkH, 10, 1);
+            const crownTrunkOverlap = 0.46;
             for (let ti = 0; ti < 38; ti++) {
               const x = (Math.random() * 2 - 1) * (half - 5);
               const z = (Math.random() * 2 - 1) * (half - 5);
               const sc = 1.18 + Math.random() * 1.42;
+              const trunkTop = GROUND_SURFACE_Y + trunkH * sc;
+              const overlap = trunkH * sc * crownTrunkOverlap;
+              const mainCenterY = trunkTop - overlap + (crownMainH * sc) * 0.5;
               const trunk = new THREE.Mesh(cylGeo, trunkMat);
               trunk.position.set(x, GROUND_SURFACE_Y + (trunkH * sc) * 0.5, z);
               trunk.scale.setScalar(sc);
-              const tree = new THREE.Mesh(coneGeo, canopyMat);
-              tree.position.set(x, GROUND_SURFACE_Y + trunkH * sc + (crownH * sc) * 0.5, z);
-              tree.scale.setScalar(sc);
+              const mainCanopy = new THREE.Mesh(crownMainGeo, canopyMatMain);
+              mainCanopy.position.set(x, mainCenterY, z);
+              mainCanopy.scale.setScalar(sc);
               scene.add(trunk);
-              scene.add(tree);
-              groundPickables.push(trunk, tree);
-              shadowPickables.push(trunk, tree);
+              scene.add(mainCanopy);
+              groundPickables.push(trunk, mainCanopy);
+              shadowPickables.push(trunk, mainCanopy);
+              const nLobes = 5;
+              for (let li = 0; li < nLobes; li++) {
+                const seed = ti * 23 + li * 17 + ((x * 13) & 7);
+                const ang = (seed * 0.61803398875) % (Math.PI * 2);
+                const out = (0.36 + (seed % 5) * 0.045) * crownMainR * sc;
+                const ox = Math.cos(ang) * out;
+                const oz = Math.sin(ang) * out;
+                const ly = mainCenterY + (((li + seed) % 5) - 2) * 0.22 * crownMainH * sc;
+                const lobe = new THREE.Mesh(crownLobeGeo, canopyMatLobe);
+                lobe.position.set(x + ox, ly, z + oz);
+                lobe.rotation.set(
+                  (seed % 11) * 0.024 - 0.12,
+                  ang + li * 0.55,
+                  (seed % 13) * 0.028 - 0.18
+                );
+                lobe.scale.setScalar(sc * (0.48 + (li % 4) * 0.065));
+                scene.add(lobe);
+                groundPickables.push(lobe);
+                shadowPickables.push(lobe);
+              }
             }
             const band = new THREE.Mesh(
               new THREE.PlaneGeometry(half * 2.4, 38, 1, 1),
