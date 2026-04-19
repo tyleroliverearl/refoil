@@ -1540,48 +1540,6 @@
             }
           }
 
-          /** Debug: coast triangulation vs world half — see session 265487 */
-          const shoreDbg = {
-            negX_grassFull: 0,
-            negX_lwMs: 0,
-            posX_grassFull: 0,
-            posX_lwMs: 0,
-            ixLow_grassFull: 0,
-            ixLow_lwMs: 0,
-            ixHigh_grassFull: 0,
-            ixHigh_lwMs: 0,
-            /** Count shoreline segments by direction for LAND cells bordering WATER. */
-            landEdgeW: 0,
-            landEdgeE: 0,
-            landEdgeN: 0,
-            landEdgeS: 0,
-            samples: []
-          };
-          function cellTouchesCoastShoreline(ix, iz) {
-            const b = cellTile(ix, iz);
-            const hereLand = b === 1 || (b >= 11 && b <= 14);
-            const hereWater = b === 2 || (b >= 20 && b <= 23);
-            if (!hereLand && !hereWater) return false;
-            const dirs = [
-              [1, 0],
-              [-1, 0],
-              [0, 1],
-              [0, -1]
-            ];
-            let seenLand = false;
-            let seenWater = false;
-            for (let di = 0; di < 4; di++) {
-              const nx = ix + dirs[di][0];
-              const nz = iz + dirs[di][1];
-              const bb = cellTile(nx, nz);
-              if (bb === 1 || (bb >= 11 && bb <= 14)) seenLand = true;
-              if (bb === 2 || (bb >= 20 && bb <= 23)) seenWater = true;
-            }
-            if (hereLand && seenWater) return true;
-            if (hereWater && seenLand) return true;
-            return false;
-          }
-
           const idx = [];
           for (let iz = 0; iz < TILES_Z; iz++) {
             for (let ix = 0; ix < TILES_X; ix++) {
@@ -1610,48 +1568,6 @@
               const l2 = cornerLand[i2];
               const l3 = cornerLand[i3];
               const lwState = l0 | (l1 << 1) | (l2 << 2) | (l3 << 3);
-              const usedGrassOnly = lwState === 0 || lwState === 15;
-              if (cellTouchesCoastShoreline(ix, iz)) {
-                if (cellB === 1 || (cellB >= 11 && cellB <= 14)) {
-                  const bW = cellTile(ix - 1, iz);
-                  const bE = cellTile(ix + 1, iz);
-                  const bS = cellTile(ix, iz - 1);
-                  const bN = cellTile(ix, iz + 1);
-                  if (bW === 2 || (bW >= 20 && bW <= 23)) shoreDbg.landEdgeW++;
-                  if (bE === 2 || (bE >= 20 && bE <= 23)) shoreDbg.landEdgeE++;
-                  if (bN === 2 || (bN >= 20 && bN <= 23)) shoreDbg.landEdgeN++;
-                  if (bS === 2 || (bS >= 20 && bS <= 23)) shoreDbg.landEdgeS++;
-                }
-                const wxCell = (ix + 0.5) * TILE_SIZE - WORLD_HALF_X;
-                const negX = wxCell < 0;
-                const ixLow = ix < TILES_X * 0.5;
-                if (usedGrassOnly) {
-                  if (negX) shoreDbg.negX_grassFull++;
-                  else shoreDbg.posX_grassFull++;
-                  if (ixLow) shoreDbg.ixLow_grassFull++;
-                  else shoreDbg.ixHigh_grassFull++;
-                } else {
-                  if (negX) shoreDbg.negX_lwMs++;
-                  else shoreDbg.posX_lwMs++;
-                  if (ixLow) shoreDbg.ixLow_lwMs++;
-                  else shoreDbg.ixHigh_lwMs++;
-                }
-                if (shoreDbg.samples.length < 56) {
-                  shoreDbg.samples.push({
-                    ix,
-                    iz,
-                    lwState,
-                    l0,
-                    l1,
-                    l2,
-                    l3,
-                    usedGrassOnly,
-                    negX,
-                    ixLow,
-                    terrainKind
-                  });
-                }
-              }
               const tris =
                 lwState === 0 || lwState === 15
                   ? marchingGrassTris(state, ix, iz, i0, i1, i2, i3)
@@ -1659,21 +1575,6 @@
               for (let ti = 0; ti < tris.length; ti++) idx.push(tris[ti]);
             }
           }
-          // #region agent log
-          fetch("http://127.0.0.1:7866/ingest/0436cf02-d141-45f1-871d-6362a9532842", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "265487" },
-            body: JSON.stringify({
-              sessionId: "265487",
-              hypothesisId: "H1-H5",
-              location: "world-tiles.html:buildTileWorld:shoreMs",
-              message: "coast marching: grassFull vs landWater by hemisphere",
-              data: shoreDbg,
-              timestamp: Date.now(),
-              runId: "pre-fix"
-            })
-          }).catch(function () {});
-          // #endregion
 
           function makeIslandTerrainUnifiedMesh() {
             if (!idx.length) return null;
@@ -1901,7 +1802,6 @@
                   }
                   const data = new Uint8Array(maskRes * maskRes);
                   // 1 = topside land (dry sand or grass), 0 = water — matches marching-squares shore, not whole tiles.
-                  let landCount = 0;
                   for (let py = 0; py < maskRes; py++) {
                     for (let px = 0; px < maskRes; px++) {
                       const u = (px + 0.5) / maskRes;
@@ -1910,10 +1810,9 @@
                       const z = v * TILES_Z * TILE_SIZE - WORLD_HALF_Z;
                       const on = landMaskHardAtWorld(x, z);
                       data[px + py * maskRes] = on;
-                      if (on) landCount++;
                     }
                   }
-                  // Hard mask (no blur): used to place foam at the true sand/water edge.
+                  // Snapshot before blur passes (used for SDF / distance fields only).
                   const dataHard = new Uint8Array(data);
                   function chamferDistance(srcOnIsZero) {
                     const n = maskRes * maskRes;
@@ -2007,41 +1906,15 @@
                   tSoft.wrapS = tSoft.wrapT = THREE.ClampToEdgeWrapping;
                   tSoft.minFilter = THREE.LinearFilter;
                   tSoft.magFilter = THREE.LinearFilter;
-                  const tHard = new THREE.DataTexture(dataHard, maskRes, maskRes, THREE.RedFormat);
-                  tHard.needsUpdate = true;
-                  tHard.wrapS = tHard.wrapT = THREE.ClampToEdgeWrapping;
-                  tHard.minFilter = THREE.LinearFilter;
-                  tHard.magFilter = THREE.LinearFilter;
                   const tSdf = new THREE.DataTexture(sdf, maskRes, maskRes, THREE.RedFormat);
                   tSdf.needsUpdate = true;
                   tSdf.wrapS = tSdf.wrapT = THREE.ClampToEdgeWrapping;
                   tSdf.minFilter = THREE.LinearFilter;
                   tSdf.magFilter = THREE.LinearFilter;
-                  // #region agent log
-                  fetch("http://127.0.0.1:7866/ingest/0436cf02-d141-45f1-871d-6362a9532842", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "265487" },
-                    body: JSON.stringify({
-                      sessionId: "265487",
-                      hypothesisId: "H6-H7",
-                      location: "world-tiles.html:makeLandMaskTexture",
-                      message: "land mask texture built",
-                      data: {
-                        maskRes: maskRes,
-                        landFrac: landCount / (maskRes * maskRes),
-                        sampleCenter: data[((maskRes >> 1) + (maskRes >> 1) * maskRes)] / 255,
-                        sampleCorner: data[0] / 255
-                      },
-                      timestamp: Date.now(),
-                      runId: "pre-fix"
-                    })
-                  }).catch(function () {});
-                  // #endregion
-                  return { soft: tSoft, hard: tHard, sdf: tSdf, sdfRange: sdfRange };
+                  return { soft: tSoft, sdf: tSdf, sdfRange: sdfRange };
                 }
                 const landMasks = makeLandMaskTextures();
                 const landMaskSoftTex = landMasks.soft;
-                const landMaskHardTex = landMasks.hard;
                 const landSdfTex = landMasks.sdf;
                 const landSdfRange = landMasks.sdfRange;
                 tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
@@ -2797,22 +2670,23 @@
             tileWorldSpawn = { x: 0, z: -8 };
 
             const floorSize = 220;
-            const floorSegs = 80;
+            const floorSegs = 32;
             const courtGeo = new THREE.PlaneGeometry(floorSize, floorSize, floorSegs, floorSegs);
             courtGeo.rotateX(-Math.PI / 2);
             const vCol = new Float32Array(courtGeo.attributes.position.count * 3);
             const marbleBase = new THREE.Color(0xf6f4ef);
             const marbleCool = new THREE.Color(0xeae6de);
+            const marbleMix = new THREE.Color();
             for (let i = 0; i < courtGeo.attributes.position.count; i++) {
               const x = courtGeo.attributes.position.getX(i);
               const z = courtGeo.attributes.position.getZ(i);
               const n =
                 Math.sin(x * 0.045) * 0.5 + Math.cos(z * 0.042) * 0.5 + Math.sin((x * 0.7 + z) * 0.028) * 0.4;
               const t = THREE.MathUtils.clamp(0.5 + n * 0.18, 0, 1);
-              const c = marbleBase.clone().lerp(marbleCool, t);
-              vCol[i * 3] = c.r;
-              vCol[i * 3 + 1] = c.g;
-              vCol[i * 3 + 2] = c.b;
+              marbleMix.copy(marbleBase).lerp(marbleCool, t);
+              vCol[i * 3] = marbleMix.r;
+              vCol[i * 3 + 1] = marbleMix.g;
+              vCol[i * 3 + 2] = marbleMix.b;
             }
             courtGeo.setAttribute("color", new THREE.BufferAttribute(vCol, 3));
             const courtMat = new THREE.MeshStandardMaterial({
@@ -2846,18 +2720,13 @@
 
             const pondWater = new THREE.Mesh(
               new THREE.PlaneGeometry(pondW * 0.96, pondD * 0.96, 1, 1),
-              new THREE.MeshPhysicalMaterial({
+              new THREE.MeshStandardMaterial({
                 color: 0x4a9ec4,
-                metalness: 0.02,
-                roughness: 0.11,
+                metalness: 0.05,
+                roughness: 0.22,
                 transparent: true,
-                opacity: 0.82,
-                transmission: 0.62,
-                thickness: 0.85,
-                ior: 1.33,
-                envMapIntensity: 0.85,
-                clearcoat: 0.35,
-                clearcoatRoughness: 0.2,
+                opacity: 0.88,
+                envMapIntensity: 0.55,
                 depthWrite: false
               })
             );
@@ -2927,15 +2796,14 @@
             });
             function gemMat(hex, emissiveMul) {
               const co = new THREE.Color(hex);
-              return new THREE.MeshPhysicalMaterial({
+              const em = new THREE.Color(co).multiplyScalar(emissiveMul);
+              return new THREE.MeshStandardMaterial({
                 color: co,
-                emissive: co.clone().multiplyScalar(emissiveMul),
+                emissive: em,
                 emissiveIntensity: 0.35,
-                metalness: 0.15,
-                roughness: 0.12,
-                clearcoat: 1,
-                clearcoatRoughness: 0.08,
-                envMapIntensity: 1.1,
+                metalness: 0.2,
+                roughness: 0.18,
+                envMapIntensity: 0.85,
                 transparent: true,
                 opacity: 0.96
               });
@@ -3026,9 +2894,10 @@
 
               const colH = cellaH + architraveH * 0.5;
               const colR = 0.72;
-              const colGeo = new THREE.CylinderGeometry(colR * 0.88, colR, colH, 16, 1);
-              const baseGeo = new THREE.CylinderGeometry(colR * 1.15, colR * 1.28, 0.45, 16, 1);
-              const capGeo = new THREE.CylinderGeometry(colR * 1.12, colR * 0.92, 0.55, 16, 1);
+              const colSegs = 12;
+              const colGeo = new THREE.CylinderGeometry(colR * 0.88, colR, colH, colSegs, 1);
+              const baseGeo = new THREE.CylinderGeometry(colR * 1.15, colR * 1.28, 0.45, colSegs, 1);
+              const capGeo = new THREE.CylinderGeometry(colR * 1.12, colR * 0.92, 0.55, colSegs, 1);
               const zFront = styD * 0.5 - colR * 1.2;
               const zBack = -styD * 0.5 + colR * 1.2;
               const xSpan = styW * 0.5 - colR * 2;
