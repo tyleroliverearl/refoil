@@ -2910,7 +2910,7 @@
           })();
         } else if (useNocturneMap) {
           (function buildNocturneWorld() {
-            // Mist fen at blue hour: peat mirror, faint menhirs, exp fog — home to a lone self-accompanying wanderer.
+            // Mist fen at blue hour: peat mirror, faint menhirs, exp fog — home to a stationary trio (bass / synth / drums).
             const half = 54;
             mapBoardHalfExtent = half;
             try {
@@ -5178,6 +5178,8 @@
         const npcs = [];
         let npcSpawnTimer = 0;
         const NPC_SPAWN_EVERY = 5.0;
+        let nocturneEnsembleT = 0;
+        let nocturneEnsemblePhrase = 0;
         const NPC_SCALE = 0.7;
         const NPC_TRIGGER_DIST = CHARACTER_FACE_H * 1.2; // slightly larger pickup radius
         const NPC_FOLLOW_DIST = CHARACTER_FACE_H * 0.5; // "half-character distance"
@@ -5377,64 +5379,74 @@
 
         function ensureNocturneComposerNpc() {
           if (!useNocturneMap || !texCharFront) return;
-          for (let ni = 0; ni < npcs.length; ni++) {
-            if (npcs[ni].nocturneComposer) return;
+          const band = [
+            { role: "bass", x: -6.2, z: 2.4, hue: 0.86, ry: Math.PI * 0.38 },
+            { role: "synth", x: 1.4, z: -3.0, hue: 0.58, ry: Math.PI * 0.92 },
+            { role: "drums", x: 5.8, z: 2.5, hue: 0.11, ry: Math.PI * 1.15 }
+          ];
+          for (let bi = 0; bi < band.length; bi++) {
+            const spec = band[bi];
+            let exists = false;
+            for (let ni = 0; ni < npcs.length; ni++) {
+              if (npcs[ni].nocturneComposer && npcs[ni].nocturneRole === spec.role) {
+                exists = true;
+                break;
+              }
+            }
+            if (exists) continue;
+            const g = new THREE.Group();
+            const img = texCharFront.image;
+            const aspect = img.width / Math.max(1, img.height);
+            const faceH = CHARACTER_FACE_H * NPC_SCALE;
+            const faceW = faceH * aspect;
+            const mat = createCharacterBillboardMaterial(texCharFront);
+            mat.uniforms.uHueShift.value = spec.hue;
+            const face = new THREE.Mesh(new THREE.PlaneGeometry(faceW, faceH), mat);
+            face.position.set(0, faceH * 0.5 - CHAR_HEAD_GROUND_PULL * NPC_SCALE, 0);
+            g.add(face);
+            const segHalfH0 = 0.18 * CHARACTER_SCALE * NPC_SCALE;
+            let y0 = NPC_DROP_START_Y;
+            const gy0 = sampleSurfaceY(spec.x, spec.z);
+            if (gy0 != null) y0 = gy0 + segHalfH0;
+            g.position.set(spec.x, y0, spec.z);
+            g.rotation.y = spec.ry;
+            scene.add(g);
+            const shadow = createNpcShadow(SHADOW_PROJ_RADIUS * NPC_SCALE * 0.75);
+            npcs.push({
+              group: g,
+              mat,
+              shadow,
+              vY: 0,
+              gained: true,
+              warpDropping: false,
+              huePhase: spec.hue,
+              wobblePhase: bi * 0.7,
+              wobbleAmp: 0.1 + bi * 0.02,
+              wobbleFreq: 0.38 + bi * 0.05,
+              followSmooth: 4,
+              joining: false,
+              joinSpeed: 2,
+              joinBumble: 0.04,
+              settleY: y0,
+              settleVY: 0,
+              prevDesiredY: null,
+              exprY: 0,
+              exprVY: 0,
+              hopTimer: 99,
+              prevTrailClimbing: false,
+              prevGX: spec.x,
+              prevGZ: spec.z,
+              scatterRX: 0,
+              scatterRZ: 0,
+              scatterGoalRX: 0,
+              scatterGoalRZ: 0,
+              scatterUseMeander: false,
+              scatterActive: false,
+              segmentIndex: bi,
+              nocturneComposer: true,
+              nocturneRole: spec.role
+            });
           }
-          const g = new THREE.Group();
-          const img = texCharFront.image;
-          const aspect = img.width / Math.max(1, img.height);
-          const faceH = CHARACTER_FACE_H * NPC_SCALE;
-          const faceW = faceH * aspect;
-          const mat = createCharacterBillboardMaterial(texCharFront);
-          mat.uniforms.uHueShift.value = 0.78;
-          const face = new THREE.Mesh(new THREE.PlaneGeometry(faceW, faceH), mat);
-          face.position.set(0, faceH * 0.5 - CHAR_HEAD_GROUND_PULL * NPC_SCALE, 0);
-          g.add(face);
-          const spotX = -5.2;
-          const spotZ = 1.8;
-          const segHalfH0 = 0.18 * CHARACTER_SCALE * NPC_SCALE;
-          let y0 = NPC_DROP_START_Y;
-          const gy0 = sampleSurfaceY(spotX, spotZ);
-          if (gy0 != null) y0 = gy0 + segHalfH0;
-          g.position.set(spotX, y0, spotZ);
-          g.rotation.y = Math.PI * 0.42;
-          scene.add(g);
-          const shadow = createNpcShadow(SHADOW_PROJ_RADIUS * NPC_SCALE * 0.75);
-          npcs.push({
-            group: g,
-            mat,
-            shadow,
-            vY: 0,
-            gained: true,
-            warpDropping: false,
-            huePhase: 0.78,
-            wobblePhase: 0,
-            wobbleAmp: 0.12,
-            wobbleFreq: 0.4,
-            followSmooth: 4,
-            joining: false,
-            joinSpeed: 2,
-            joinBumble: 0.04,
-            settleY: y0,
-            settleVY: 0,
-            prevDesiredY: null,
-            exprY: 0,
-            exprVY: 0,
-            hopTimer: 99,
-            prevTrailClimbing: false,
-            prevGX: spotX,
-            prevGZ: spotZ,
-            scatterRX: 0,
-            scatterRZ: 0,
-            scatterGoalRX: 0,
-            scatterGoalRZ: 0,
-            scatterUseMeander: false,
-            scatterActive: false,
-            segmentIndex: 0,
-            nocturneComposer: true,
-            nocturneMusicT: 0,
-            nocturnePhrase: 0
-          });
         }
 
         function pushPlayerTrail(dt) {
@@ -6653,6 +6665,7 @@
             const isNpcBell = voiceId.startsWith("npcBell");
             if (isNpcBell) trimVoicesByPrefix("npcBell_", 12);
             else if (voiceId.startsWith("bass_")) trimVoicesByPrefix("bass_", 10);
+            else if (voiceId.startsWith("noctSyn_")) trimVoicesByPrefix("noctSyn_", 10);
 
             const t = audio.currentTime;
             const carrier = audio.createOscillator();
@@ -7070,39 +7083,63 @@
           }
         }
 
-        /** `nocturne` map: lone NPC hums evolving pentatonic phrases on a timer (no player proximity). */
-        function playNocturneComposerPhrase(phraseIx) {
+        /**
+         * `nocturne` map: trio in sync — bass (sub register FM), synth (lead register FM), drums (`triggerDrum`).
+         */
+        function playNocturneEnsemblePhrase(phraseIx) {
           if (FmBellSynth.isEngineMuted()) return;
-          const codes = [
-            "Digit1",
-            "Digit2",
-            "Digit3",
-            "Digit5",
-            "Digit6",
-            "Digit8",
-            "Digit6",
-            "Digit5",
-            "Digit4",
-            "Digit2"
-          ];
-          const nNotes = 5 + (phraseIx % 4);
-          for (let i = 0; i < nNotes; i++) {
-            const code = codes[(phraseIx * 3 + i * 5 + (phraseIx >> 2)) % codes.length];
-            const hz = FM_BELL_HZ[code];
-            const id = "npcBell_noct_" + phraseIx + "_" + i;
-            const delayMs = i * 102 + (phraseIx % 5) * 16;
-            const noteLen = 320 + (i % 5) * 70 + (phraseIx & 3) * 24;
+          const bassProg = ["Digit2", "Digit3", "Digit5", "Digit3", "Digit4", "Digit2"];
+          for (let i = 0; i < 4; i++) {
+            const code = bassProg[(phraseIx + i * 2) % bassProg.length];
+            const hz = FM_BASS_HZ[code];
+            const id = "bass_noct_" + phraseIx + "_" + i;
+            const delayMs = i * 255 + (phraseIx % 3) * 18;
+            const dur = 430 + (i % 3) * 60;
             setTimeout(function () {
-              FmBellSynth.noteOn(id, hz);
+              FmBellSynth.noteOn(id, hz, code);
               setTimeout(function () {
                 FmBellSynth.noteOff(id);
-              }, noteLen);
+              }, dur);
+            }, delayMs);
+          }
+          const mel = ["Digit5", "Digit6", "Digit8", "Digit7", "Digit6", "Digit5"];
+          for (let i = 0; i < mel.length; i++) {
+            const code = mel[(phraseIx + i) % mel.length];
+            const fc = FM_BELL_HZ[code];
+            const id = "noctSyn_" + phraseIx + "_" + i;
+            const delayMs = 65 + i * 162 + (phraseIx % 4) * 12;
+            const dur = 245 + (i % 4) * 38;
+            setTimeout(function () {
+              FmBellSynth.noteOn(id, fc, "Digit3");
+              setTimeout(function () {
+                FmBellSynth.noteOff(id);
+              }, dur);
+            }, delayMs);
+          }
+          const kit = ["kick", "hat", "snare", "kick", "hat", "snare", "hat"];
+          for (let i = 0; i < kit.length; i++) {
+            const delayMs = 25 + i * 188 + (phraseIx % 5) * 20;
+            const kind = kit[(phraseIx + i) % kit.length];
+            setTimeout(function () {
+              FmBellSynth.triggerDrum(kind);
             }, delayMs);
           }
         }
 
         function updateNpcs(dt) {
           if (!npcs.length) return;
+          if (useNocturneMap) {
+            nocturneEnsembleT = (nocturneEnsembleT || 0) + dt;
+            const interval = 3.35;
+            if (nocturneEnsembleT >= interval) {
+              nocturneEnsembleT = 0;
+              nocturneEnsemblePhrase = ((nocturneEnsemblePhrase | 0) + 1) % 512;
+              try {
+                FmBellSynth.unlock();
+              } catch (eNe) {}
+              playNocturneEnsemblePhrase(nocturneEnsemblePhrase);
+            }
+          }
           if (npcScatterJumpTimer > 0) {
             npcScatterJumpTimer -= dt;
             if (npcScatterJumpTimer <= 0) {
@@ -7121,24 +7158,18 @@
             const g = n.group;
 
             if (n.nocturneComposer) {
-              n.nocturneMusicT = (n.nocturneMusicT || 0) + dt;
-              const interval = 3.15;
-              if (n.nocturneMusicT >= interval) {
-                n.nocturneMusicT = 0;
-                n.nocturnePhrase = ((n.nocturnePhrase | 0) + 1) % 512;
-                try {
-                  FmBellSynth.unlock();
-                } catch (eNc) {}
-                playNocturneComposerPhrase(n.nocturnePhrase);
-              }
               const segHalfH = 0.18 * CHARACTER_SCALE * NPC_SCALE;
               const gy = sampleSurfaceY(g.position.x, g.position.z);
               if (gy != null) {
                 g.position.y = gy + segHalfH;
               }
               n.huePhase += dt * 0.28;
+              let baseHue = 0.74;
+              if (n.nocturneRole === "bass") baseHue = 0.82;
+              else if (n.nocturneRole === "synth") baseHue = 0.57;
+              else if (n.nocturneRole === "drums") baseHue = 0.11;
               if (n.mat && n.mat.uniforms && n.mat.uniforms.uHueShift) {
-                n.mat.uniforms.uHueShift.value = mod1(0.74 + Math.sin(n.huePhase) * 0.06);
+                n.mat.uniforms.uHueShift.value = mod1(baseHue + Math.sin(n.huePhase) * 0.055);
               }
               updateBillboardFor(g, n.mat);
               updateNpcShadow(n);
