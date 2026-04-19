@@ -2764,66 +2764,90 @@
             scene.add(ground);
             groundPickables.push(ground);
             shadowPickables.push(ground);
-            const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3328, roughness: 0.94 });
-            const canopyMatMain = new THREE.MeshStandardMaterial({
-              color: 0x143f2c,
-              roughness: 0.82,
+            const trunkMat = new THREE.MeshStandardMaterial({
+              color: 0x5c3a2a,
+              roughness: 0.97,
               metalness: 0.02,
-              envMapIntensity: 0.34,
+              envMapIntensity: 0.22
+            });
+            const trunkFlareMat = new THREE.MeshStandardMaterial({
+              color: 0x4a2e22,
+              roughness: 0.98,
+              metalness: 0.02,
+              envMapIntensity: 0.2
+            });
+            const sprayMat = new THREE.MeshStandardMaterial({
+              color: 0x0f3528,
+              roughness: 0.88,
+              metalness: 0.02,
+              envMapIntensity: 0.28,
               flatShading: true
             });
-            const canopyMatLobe = new THREE.MeshStandardMaterial({
-              color: 0x0d3324,
-              roughness: 0.86,
+            const crownCloudMat = new THREE.MeshStandardMaterial({
+              color: 0x1a4536,
+              roughness: 0.9,
               metalness: 0.02,
-              envMapIntensity: 0.3,
-              flatShading: true
+              envMapIntensity: 0.32
             });
-            // Snow / tundra: sequoia trunk + **large layered foliage** — crown starts well down the trunk;
-            // shared geoms: tall main cone (height segments = lumpy silhouette) + smaller side cones for clumps.
-            const trunkH = 8.65;
-            const crownMainH = 4.05;
-            const crownMainR = 1.22;
-            const crownMainGeo = new THREE.ConeGeometry(crownMainR, crownMainH, 11, 4);
-            const crownLobeGeo = new THREE.ConeGeometry(0.5, 1.72, 8, 2);
-            const cylGeo = new THREE.CylinderGeometry(0.078, 0.152, trunkH, 10, 1);
-            const crownTrunkOverlap = 0.46;
+            // Coast redwood read: **massive flared column trunk** (not a thin pole) + **columnar crown** built from
+            // many narrow drooping needle sprays on a spiral + a few squashed spheres (fine texture, not one big cone).
+            const trunkH = 8.55;
+            const rTop = 0.26;
+            const rBot = 0.62;
+            const trunkGeo = new THREE.CylinderGeometry(rTop, rBot, trunkH, 18, 5);
+            const flareH = 0.52;
+            const flareGeo = new THREE.CylinderGeometry(rBot * 0.92, rBot * 1.38, flareH, 16, 2);
+            const sprayGeo = new THREE.ConeGeometry(0.1, 1.28, 5, 2);
+            const crownSphereGeo = new THREE.SphereGeometry(0.5, 7, 6);
+            function pushTreeMesh(m) {
+              scene.add(m);
+              groundPickables.push(m);
+              shadowPickables.push(m);
+            }
             for (let ti = 0; ti < 38; ti++) {
               const x = (Math.random() * 2 - 1) * (half - 5);
               const z = (Math.random() * 2 - 1) * (half - 5);
-              const sc = 1.18 + Math.random() * 1.42;
-              const trunkTop = GROUND_SURFACE_Y + trunkH * sc;
-              const overlap = trunkH * sc * crownTrunkOverlap;
-              const mainCenterY = trunkTop - overlap + (crownMainH * sc) * 0.5;
-              const trunk = new THREE.Mesh(cylGeo, trunkMat);
-              trunk.position.set(x, GROUND_SURFACE_Y + (trunkH * sc) * 0.5, z);
+              const sc = 1.12 + Math.random() * 1.38;
+              const gY = GROUND_SURFACE_Y;
+              const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+              trunk.position.set(x, gY + (trunkH * sc) * 0.5, z);
               trunk.scale.setScalar(sc);
-              const mainCanopy = new THREE.Mesh(crownMainGeo, canopyMatMain);
-              mainCanopy.position.set(x, mainCenterY, z);
-              mainCanopy.scale.setScalar(sc);
-              scene.add(trunk);
-              scene.add(mainCanopy);
-              groundPickables.push(trunk, mainCanopy);
-              shadowPickables.push(trunk, mainCanopy);
-              const nLobes = 5;
-              for (let li = 0; li < nLobes; li++) {
-                const seed = ti * 23 + li * 17 + ((x * 13) & 7);
-                const ang = (seed * 0.61803398875) % (Math.PI * 2);
-                const out = (0.36 + (seed % 5) * 0.045) * crownMainR * sc;
-                const ox = Math.cos(ang) * out;
-                const oz = Math.sin(ang) * out;
-                const ly = mainCenterY + (((li + seed) % 5) - 2) * 0.22 * crownMainH * sc;
-                const lobe = new THREE.Mesh(crownLobeGeo, canopyMatLobe);
-                lobe.position.set(x + ox, ly, z + oz);
-                lobe.rotation.set(
-                  (seed % 11) * 0.024 - 0.12,
-                  ang + li * 0.55,
-                  (seed % 13) * 0.028 - 0.18
-                );
-                lobe.scale.setScalar(sc * (0.48 + (li % 4) * 0.065));
-                scene.add(lobe);
-                groundPickables.push(lobe);
-                shadowPickables.push(lobe);
+              trunk.rotation.y = (ti * 0.37 + x * 0.02) % (Math.PI * 2);
+              pushTreeMesh(trunk);
+              const flare = new THREE.Mesh(flareGeo, trunkFlareMat);
+              flare.position.set(x, gY + (flareH * sc) * 0.5, z);
+              flare.scale.setScalar(sc);
+              flare.rotation.y = trunk.rotation.y + 0.2;
+              pushTreeMesh(flare);
+              const nSprays = 20;
+              for (let si = 0; si < nSprays; si++) {
+                const u = 0.34 + (si / (nSprays - 1)) * 0.62;
+                const y = gY + trunkH * sc * u;
+                const rShell = sc * (rBot * (1 - u) + rTop * u) + sc * 0.04;
+                const ang = si * 1.37 + ti * 0.61 + Math.sin(x * 0.15 + z * 0.11) * 0.4;
+                const px = x + Math.cos(ang) * rShell;
+                const pz = z + Math.sin(ang) * rShell;
+                const spray = new THREE.Mesh(sprayGeo, sprayMat);
+                spray.position.set(px, y, pz);
+                const droop = 0.72 + (si % 5) * 0.04;
+                spray.rotation.order = "YXZ";
+                spray.rotation.y = ang + Math.PI * 0.5 + (Math.random() - 0.5) * 0.35;
+                spray.rotation.x = Math.PI * droop + (Math.random() - 0.5) * 0.12;
+                spray.rotation.z = (Math.random() - 0.5) * 0.22;
+                const ss = sc * (0.82 + (si % 4) * 0.07);
+                spray.scale.set(ss * 0.95, ss * 1.05, ss * 0.92);
+                pushTreeMesh(spray);
+              }
+              for (let ci = 0; ci < 3; ci++) {
+                const uC = 0.72 + ci * 0.1 + (ti % 3) * 0.02;
+                const yC = gY + trunkH * sc * uC + sc * 0.35;
+                const angC = ti * 0.9 + ci * 2.1;
+                const rC = sc * (rBot * (1 - uC) + rTop * uC) * 0.55;
+                const cloud = new THREE.Mesh(crownSphereGeo, crownCloudMat);
+                cloud.position.set(x + Math.cos(angC) * rC, yC, z + Math.sin(angC) * rC);
+                cloud.scale.set(sc * 1.45, sc * 0.42, sc * 1.38);
+                cloud.rotation.set((ti + ci) * 0.15, angC, (ti - ci) * 0.12);
+                pushTreeMesh(cloud);
               }
             }
             const band = new THREE.Mesh(
@@ -6267,7 +6291,7 @@
               tapeFxOut.gain.value = 1;
               playerMaster.connect(tapeDelayIn);
               noctStabSend = ctx.createGain();
-              noctStabSend.gain.value = 0.58;
+              noctStabSend.gain.value = 0.26;
               noctStabSend.connect(tapeDelayIn);
               tapeDelayIn.connect(tapeDry);
               tapeDry.connect(tapeFxOut);
@@ -6804,27 +6828,38 @@
               ampGain.connect(npcDry);
               ampGain.connect(npcConv);
             } else if (isNoctLead) {
-              const MOD_RATIO = 2.06;
+              const MOD_RATIO = 2.14;
               carrier.type = "triangle";
               mod.type = "sine";
               carrier.frequency.setValueAtTime(fc, t);
               mod.frequency.setValueAtTime(fc * MOD_RATIO, t);
-              carrier.detune.setValueAtTime((Math.random() - 0.5) * 14, t);
-              mod.detune.setValueAtTime((Math.random() - 0.5) * 10, t);
-              const indexPeak = Math.min(48, Math.max(10, fc * 0.052));
-              const indexSus = Math.min(18, Math.max(3.5, fc * 0.024));
+              carrier.detune.setValueAtTime((Math.random() - 0.5) * 11, t);
+              mod.detune.setValueAtTime((Math.random() - 0.5) * 8, t);
+              const indexPeak = Math.min(56, Math.max(12, fc * 0.064));
+              const indexSus = Math.min(23, Math.max(4.2, fc * 0.029));
               modGain.gain.setValueAtTime(0.0001, t);
-              modGain.gain.exponentialRampToValueAtTime(indexPeak, t + 0.008);
-              modGain.gain.exponentialRampToValueAtTime(indexSus, t + 0.11);
-              modGain.gain.exponentialRampToValueAtTime(0.02, t + 0.42);
+              modGain.gain.exponentialRampToValueAtTime(indexPeak, t + 0.0065);
+              modGain.gain.exponentialRampToValueAtTime(indexSus, t + 0.12);
+              modGain.gain.exponentialRampToValueAtTime(0.035, t + 0.48);
               mod.connect(modGain);
               modGain.connect(carrier.frequency);
               ampGain.gain.setValueAtTime(0.0001, t);
-              ampGain.gain.exponentialRampToValueAtTime(0.26, t + 0.005);
-              ampGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.62);
+              ampGain.gain.exponentialRampToValueAtTime(0.41, t + 0.0042);
+              ampGain.gain.exponentialRampToValueAtTime(0.22, t + 0.08);
+              ampGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.78);
+              resPeak = audio.createBiquadFilter();
+              resPeak.type = "peaking";
+              const pkF = Math.min(4800, Math.max(1500, fc * 3.35 + 680));
+              resPeak.frequency.setValueAtTime(pkF, t);
+              resPeak.Q.setValueAtTime(1.42, t);
+              resPeak.gain.setValueAtTime(0, t);
+              resPeak.gain.linearRampToValueAtTime(4.8, t + 0.0055);
+              resPeak.gain.linearRampToValueAtTime(2.6, t + 0.048);
+              resPeak.gain.linearRampToValueAtTime(0.55, t + 0.2);
               carrier.connect(ampGain);
-              ampGain.connect(npcDry);
-              ampGain.connect(npcConv);
+              ampGain.connect(resPeak);
+              resPeak.connect(npcDry);
+              resPeak.connect(npcConv);
             } else if (isNoctBass) {
               // Pocket bass on NPC bus (same path as glass lead) — sub + mild FM triangle, audible under drums.
               const MOD_RATIO = 1.0;
@@ -6854,9 +6889,9 @@
               subGain.gain.exponentialRampToValueAtTime(0.28, t + 0.09);
               filt = audio.createBiquadFilter();
               filt.type = "lowpass";
-              filt.Q.setValueAtTime(0.82, t);
-              filt.frequency.setValueAtTime(2400, t);
-              filt.frequency.exponentialRampToValueAtTime(380, t + 0.14);
+              filt.Q.setValueAtTime(1.02, t);
+              filt.frequency.setValueAtTime(2550, t);
+              filt.frequency.exponentialRampToValueAtTime(400, t + 0.14);
               carrier.connect(ampGain);
               ampGain.connect(filt);
               filt.connect(npcDry);
@@ -6871,8 +6906,8 @@
               mod.frequency.setValueAtTime(fc, t);
               mod.connect(modGain);
               ampGain.gain.setValueAtTime(0.0001, t);
-              ampGain.gain.exponentialRampToValueAtTime(0.31, t + 0.002);
-              ampGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+              ampGain.gain.exponentialRampToValueAtTime(0.14, t + 0.0022);
+              ampGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
               carrier.connect(ampGain);
               if (send) ampGain.connect(send);
               else {
@@ -6997,9 +7032,9 @@
               vrec.sub = sub;
               vrec.subGain = subGain;
               vrec.filt = filt;
-              if (resPeak) vrec.resPeak = resPeak;
               if (lowWarm) vrec.lowWarm = lowWarm;
             }
+            if (resPeak) vrec.resPeak = resPeak;
             voices.set(voiceId, vrec);
             if (pendingReleaseVoiceIds.has(voiceId)) {
               pendingReleaseVoiceIds.delete(voiceId);
@@ -7497,7 +7532,7 @@
             const fc = FM_BELL_HZ[pick];
             const id = "noctLead_" + phraseIx + "_" + i;
             const delayMs = hits[i].t + ((phraseIx * 13 + i * 17) % 90);
-            const dur = 175 + (i % 3) * 52 + (phraseIx % 2) * 40;
+            const dur = 248 + (i % 3) * 58 + (phraseIx % 2) * 48;
             setTimeout(function () {
               FmBellSynth.noteOn(id, fc);
               pulseNocturneComposer("synth", 1.55, 0.24);
