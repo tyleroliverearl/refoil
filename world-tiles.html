@@ -602,7 +602,16 @@
       function initGame() {
         const LS_MAP_MODE = "worldTilesMapMode";
         /** HUD cycle order; extend alongside readMapMode() and world init when adding maps. */
-        const MAP_MODE_IDS = ["island", "board", "tesseract", "mesa", "aurora", "reef", "primordium"];
+        const MAP_MODE_IDS = [
+          "island",
+          "board",
+          "tesseract",
+          "mesa",
+          "aurora",
+          "reef",
+          "primordium",
+          "nocturne"
+        ];
         function readMapMode() {
           try {
             const q = new URLSearchParams(String(location.search || ""));
@@ -623,8 +632,14 @@
         const useAuroraMap = mapMode === "aurora";
         const useReefMap = mapMode === "reef";
         const usePrimordiumMap = mapMode === "primordium";
+        const useNocturneMap = mapMode === "nocturne";
         const useArenaMap =
-          useBoardMap || useMesaMap || useAuroraMap || useReefMap || usePrimordiumMap;
+          useBoardMap ||
+          useMesaMap ||
+          useAuroraMap ||
+          useReefMap ||
+          usePrimordiumMap ||
+          useNocturneMap;
         try {
           const q = new URLSearchParams(String(location.search || ""));
           const u = q.get("map");
@@ -2892,6 +2907,83 @@
             try {
               renderer.domElement.style.background = "#" + skyR.getHexString();
             } catch (eSkyR) {}
+          })();
+        } else if (useNocturneMap) {
+          (function buildNocturneWorld() {
+            // Mist fen at blue hour: peat mirror, faint menhirs, exp fog — home to a lone self-accompanying wanderer.
+            const half = 54;
+            mapBoardHalfExtent = half;
+            try {
+              scene.fog = new THREE.FogExp2(0x1a0d28, 0.026);
+            } catch (eFog) {}
+            const peatMat = new THREE.MeshStandardMaterial({
+              color: 0x252038,
+              roughness: 0.94,
+              metalness: 0.08,
+              envMapIntensity: 0.22
+            });
+            const ground = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2, 1, 1), peatMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = GROUND_SURFACE_Y;
+            ground.userData.tileKey = "nocturne_peat";
+            ground.userData.solid = true;
+            scene.add(ground);
+            groundPickables.push(ground);
+            shadowPickables.push(ground);
+            const stoneMat = new THREE.MeshStandardMaterial({
+              color: 0x3a3548,
+              roughness: 0.88,
+              metalness: 0.04,
+              envMapIntensity: 0.28
+            });
+            const menhirPositions = [
+              [-18, -14],
+              [20, -10],
+              [-8, 22],
+              [14, 18],
+              [-22, 8],
+              [6, -20]
+            ];
+            for (let mi = 0; mi < menhirPositions.length; mi++) {
+              const px = menhirPositions[mi][0];
+              const pz = menhirPositions[mi][1];
+              const h = 2.8 + (mi % 3) * 0.55;
+              const w = 0.65 + (mi % 2) * 0.15;
+              const mon = new THREE.Mesh(new THREE.BoxGeometry(w, h, w * 0.78), stoneMat);
+              mon.position.set(px, GROUND_SURFACE_Y + h * 0.5, pz);
+              mon.rotation.y = mi * 0.55;
+              scene.add(mon);
+              groundPickables.push(mon);
+              shadowPickables.push(mon);
+            }
+            const willow = new THREE.Mesh(
+              new THREE.TorusGeometry(3.2, 0.04, 5, 48),
+              new THREE.MeshBasicMaterial({
+                color: 0x4466aa,
+                transparent: true,
+                opacity: 0.15,
+                depthWrite: false
+              })
+            );
+            willow.rotation.x = Math.PI / 2;
+            willow.position.set(0, GROUND_SURFACE_Y + 1.1, 0);
+            scene.add(willow);
+            for (let si = 0; si < 320; si++) {
+              landSpawnList.push({
+                x: (Math.random() * 2 - 1) * 46,
+                z: (Math.random() * 2 - 1) * 46,
+                b: 1,
+                ix: 0,
+                iz: 0
+              });
+            }
+            tileWorldSpawn = { x: 12, z: -8 };
+            const skyN = new THREE.Color(0x0c0614);
+            scene.background = skyN;
+            renderer.setClearColor(skyN, 1);
+            try {
+              renderer.domElement.style.background = "#" + skyN.getHexString();
+            } catch (eSkyN) {}
           })();
         } else if (usePrimordiumMap) {
           (function buildPrimordiumWorld() {
@@ -5283,6 +5375,68 @@
           });
         }
 
+        function ensureNocturneComposerNpc() {
+          if (!useNocturneMap || !texCharFront) return;
+          for (let ni = 0; ni < npcs.length; ni++) {
+            if (npcs[ni].nocturneComposer) return;
+          }
+          const g = new THREE.Group();
+          const img = texCharFront.image;
+          const aspect = img.width / Math.max(1, img.height);
+          const faceH = CHARACTER_FACE_H * NPC_SCALE;
+          const faceW = faceH * aspect;
+          const mat = createCharacterBillboardMaterial(texCharFront);
+          mat.uniforms.uHueShift.value = 0.78;
+          const face = new THREE.Mesh(new THREE.PlaneGeometry(faceW, faceH), mat);
+          face.position.set(0, faceH * 0.5 - CHAR_HEAD_GROUND_PULL * NPC_SCALE, 0);
+          g.add(face);
+          const spotX = -5.2;
+          const spotZ = 1.8;
+          const segHalfH0 = 0.18 * CHARACTER_SCALE * NPC_SCALE;
+          let y0 = NPC_DROP_START_Y;
+          const gy0 = sampleSurfaceY(spotX, spotZ);
+          if (gy0 != null) y0 = gy0 + segHalfH0;
+          g.position.set(spotX, y0, spotZ);
+          g.rotation.y = Math.PI * 0.42;
+          scene.add(g);
+          const shadow = createNpcShadow(SHADOW_PROJ_RADIUS * NPC_SCALE * 0.75);
+          npcs.push({
+            group: g,
+            mat,
+            shadow,
+            vY: 0,
+            gained: true,
+            warpDropping: false,
+            huePhase: 0.78,
+            wobblePhase: 0,
+            wobbleAmp: 0.12,
+            wobbleFreq: 0.4,
+            followSmooth: 4,
+            joining: false,
+            joinSpeed: 2,
+            joinBumble: 0.04,
+            settleY: y0,
+            settleVY: 0,
+            prevDesiredY: null,
+            exprY: 0,
+            exprVY: 0,
+            hopTimer: 99,
+            prevTrailClimbing: false,
+            prevGX: spotX,
+            prevGZ: spotZ,
+            scatterRX: 0,
+            scatterRZ: 0,
+            scatterGoalRX: 0,
+            scatterGoalRZ: 0,
+            scatterUseMeander: false,
+            scatterActive: false,
+            segmentIndex: 0,
+            nocturneComposer: true,
+            nocturneMusicT: 0,
+            nocturnePhrase: 0
+          });
+        }
+
         function pushPlayerTrail(dt) {
           // Record the player's actual movement path, including jumps (y).
           if (playerTrail.length === 0) {
@@ -6916,6 +7070,37 @@
           }
         }
 
+        /** `nocturne` map: lone NPC hums evolving pentatonic phrases on a timer (no player proximity). */
+        function playNocturneComposerPhrase(phraseIx) {
+          if (FmBellSynth.isEngineMuted()) return;
+          const codes = [
+            "Digit1",
+            "Digit2",
+            "Digit3",
+            "Digit5",
+            "Digit6",
+            "Digit8",
+            "Digit6",
+            "Digit5",
+            "Digit4",
+            "Digit2"
+          ];
+          const nNotes = 5 + (phraseIx % 4);
+          for (let i = 0; i < nNotes; i++) {
+            const code = codes[(phraseIx * 3 + i * 5 + (phraseIx >> 2)) % codes.length];
+            const hz = FM_BELL_HZ[code];
+            const id = "npcBell_noct_" + phraseIx + "_" + i;
+            const delayMs = i * 102 + (phraseIx % 5) * 16;
+            const noteLen = 320 + (i % 5) * 70 + (phraseIx & 3) * 24;
+            setTimeout(function () {
+              FmBellSynth.noteOn(id, hz);
+              setTimeout(function () {
+                FmBellSynth.noteOff(id);
+              }, noteLen);
+            }, delayMs);
+          }
+        }
+
         function updateNpcs(dt) {
           if (!npcs.length) return;
           if (npcScatterJumpTimer > 0) {
@@ -6934,6 +7119,31 @@
           for (let i = 0; i < npcs.length; i++) {
             const n = npcs[i];
             const g = n.group;
+
+            if (n.nocturneComposer) {
+              n.nocturneMusicT = (n.nocturneMusicT || 0) + dt;
+              const interval = 3.15;
+              if (n.nocturneMusicT >= interval) {
+                n.nocturneMusicT = 0;
+                n.nocturnePhrase = ((n.nocturnePhrase | 0) + 1) % 512;
+                try {
+                  FmBellSynth.unlock();
+                } catch (eNc) {}
+                playNocturneComposerPhrase(n.nocturnePhrase);
+              }
+              const segHalfH = 0.18 * CHARACTER_SCALE * NPC_SCALE;
+              const gy = sampleSurfaceY(g.position.x, g.position.z);
+              if (gy != null) {
+                g.position.y = gy + segHalfH;
+              }
+              n.huePhase += dt * 0.28;
+              if (n.mat && n.mat.uniforms && n.mat.uniforms.uHueShift) {
+                n.mat.uniforms.uHueShift.value = mod1(0.74 + Math.sin(n.huePhase) * 0.06);
+              }
+              updateBillboardFor(g, n.mat);
+              updateNpcShadow(n);
+              continue;
+            }
 
             // After a fall-warp, drop them from above in order, then resume snake logic.
             if (n.gained && n.warpDropping) {
@@ -8554,8 +8764,9 @@
           while (npcSpawnTimer >= NPC_SPAWN_EVERY && npcSpawnBurst < 2) {
             npcSpawnTimer -= NPC_SPAWN_EVERY;
             npcSpawnBurst++;
-            spawnNpc();
+            if (!useNocturneMap) spawnNpc();
           }
+          if (useNocturneMap) ensureNocturneComposerNpc();
           updateNpcs(dt);
           updatePropPhysics("cube", dt);
           updatePropPhysics("ball", dt);
