@@ -613,13 +613,17 @@
           "nocturne"
         ];
         function readMapMode() {
+          function normMapId(id) {
+            if (id === "tundra") return "aurora";
+            return id;
+          }
           try {
             const q = new URLSearchParams(String(location.search || ""));
-            const u = q.get("map");
+            const u = normMapId(q.get("map"));
             if (MAP_MODE_IDS.indexOf(u) >= 0) return u;
           } catch (e) {}
           try {
-            const ls = localStorage.getItem(LS_MAP_MODE);
+            const ls = normMapId(localStorage.getItem(LS_MAP_MODE));
             if (MAP_MODE_IDS.indexOf(ls) >= 0) return ls;
           } catch (e2) {}
           return "board";
@@ -2760,23 +2764,26 @@
             scene.add(ground);
             groundPickables.push(ground);
             shadowPickables.push(ground);
-            const trunkMat = new THREE.MeshStandardMaterial({ color: 0x3a2818, roughness: 0.95 });
-            const pineMat = new THREE.MeshStandardMaterial({
-              color: 0x1c4a32,
-              roughness: 0.75,
-              envMapIntensity: 0.35
+            const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3328, roughness: 0.94 });
+            const canopyMat = new THREE.MeshStandardMaterial({
+              color: 0x123c28,
+              roughness: 0.78,
+              envMapIntensity: 0.32
             });
-            const coneGeo = new THREE.ConeGeometry(0.52, 1.15, 6);
-            const cylGeo = new THREE.CylinderGeometry(0.09, 0.11, 0.5, 6);
+            // Snow / tundra: sequoia-scale silhouettes — very tall tapered trunk, modest crown aloft.
+            const trunkH = 8.65;
+            const crownH = 1.68;
+            const coneGeo = new THREE.ConeGeometry(0.46, crownH, 8, 1);
+            const cylGeo = new THREE.CylinderGeometry(0.078, 0.152, trunkH, 10, 1);
             for (let ti = 0; ti < 38; ti++) {
               const x = (Math.random() * 2 - 1) * (half - 5);
               const z = (Math.random() * 2 - 1) * (half - 5);
-              const sc = 0.85 + Math.random() * 1.1;
+              const sc = 1.18 + Math.random() * 1.42;
               const trunk = new THREE.Mesh(cylGeo, trunkMat);
-              trunk.position.set(x, GROUND_SURFACE_Y + 0.25 * sc, z);
+              trunk.position.set(x, GROUND_SURFACE_Y + (trunkH * sc) * 0.5, z);
               trunk.scale.setScalar(sc);
-              const tree = new THREE.Mesh(coneGeo, pineMat);
-              tree.position.set(x, GROUND_SURFACE_Y + 0.52 * sc + 0.55 * sc, z);
+              const tree = new THREE.Mesh(coneGeo, canopyMat);
+              tree.position.set(x, GROUND_SURFACE_Y + trunkH * sc + (crownH * sc) * 0.5, z);
               tree.scale.setScalar(sc);
               scene.add(trunk);
               scene.add(tree);
@@ -2784,7 +2791,7 @@
               shadowPickables.push(trunk, tree);
             }
             const band = new THREE.Mesh(
-              new THREE.PlaneGeometry(half * 2.4, 28, 1, 1),
+              new THREE.PlaneGeometry(half * 2.4, 38, 1, 1),
               new THREE.MeshBasicMaterial({
                 color: 0x55ffc8,
                 transparent: true,
@@ -2793,7 +2800,7 @@
                 side: THREE.DoubleSide
               })
             );
-            band.position.set(0, 16, -half * 0.72);
+            band.position.set(0, 32, -half * 0.72);
             band.rotation.x = -0.28;
             scene.add(band);
             const band2 = band.clone();
@@ -5449,7 +5456,14 @@
               scatterActive: false,
               segmentIndex: bi,
               nocturneComposer: true,
-              nocturneRole: spec.role
+              nocturneRole: spec.role,
+              noctAnchorX: spec.x,
+              noctAnchorZ: spec.z,
+              noctAnchorRy: spec.ry,
+              noctJumpVy: 0,
+              noctOffY: 0,
+              noctDanceT: bi * 2.07,
+              noctPlayExcite: 0
             });
           }
         }
@@ -6762,25 +6776,25 @@
             } else {
               const P = playerInst;
               const isPsyBass = voiceId.startsWith("bassNoctPsy_");
-              // Player: resonant acid-style bass (saw, screaming LP envelope, light drive).
+              // Player bass: acid-style. Nocturne NPC bass: rounder FM + less drive so the glass lead cuts through.
               lowWarm = null;
-              const MOD_RATIO = isPsyBass ? 2.55 : P.modRatio;
+              const MOD_RATIO = isPsyBass ? 2.22 : P.modRatio;
               carrier.type = isPsyBass ? "triangle" : P.carrierType;
               mod.type = isPsyBass ? "sine" : P.modType;
               carrier.frequency.setValueAtTime(fc, t);
               mod.frequency.setValueAtTime(fc * MOD_RATIO, t);
               const dtc =
                 P.detuneCentsRange != null && P.detuneCentsRange >= 0 ? P.detuneCentsRange : 4.5;
-              const detMul = isPsyBass ? 2.35 : 1;
+              const detMul = isPsyBass ? 1.05 : 1;
               carrier.detune.setValueAtTime((Math.random() - 0.5) * dtc * detMul, t);
               mod.detune.setValueAtTime((Math.random() - 0.5) * dtc * detMul, t);
 
               let indexPeak = Math.min(42, Math.max(6, fc * 0.058)) * P.indexScale;
               indexPeak = Math.min(55, Math.max(4, indexPeak));
-              if (isPsyBass) indexPeak = Math.min(58, indexPeak * 1.18);
+              if (isPsyBass) indexPeak = Math.min(36, indexPeak * 0.72);
               let indexSus = Math.min(16, Math.max(2.5, fc * 0.021)) * P.indexScale;
               indexSus = Math.min(22, Math.max(1.5, indexSus));
-              if (isPsyBass) indexSus = Math.min(24, indexSus * 1.12);
+              if (isPsyBass) indexSus = Math.min(12, indexSus * 0.78);
               modGain.gain.setValueAtTime(0.0001, t);
               modGain.gain.exponentialRampToValueAtTime(indexPeak, t + 0.011);
               modGain.gain.exponentialRampToValueAtTime(indexSus, t + 0.095);
@@ -6788,10 +6802,11 @@
               mod.connect(modGain);
               modGain.connect(carrier.frequency);
 
+              const psyLv = isPsyBass ? 0.58 : 1;
               ampGain.gain.setValueAtTime(0.0001, t);
-              ampGain.gain.exponentialRampToValueAtTime(0.5 * P.ampPeakScale, t + 0.0035);
-              ampGain.gain.exponentialRampToValueAtTime(0.36 * P.ampSus1Scale, t + isPsyBass ? 0.1 : 0.07);
-              ampGain.gain.exponentialRampToValueAtTime(0.14 * P.ampSus2Scale, t + isPsyBass ? 0.48 : 0.32);
+              ampGain.gain.exponentialRampToValueAtTime(0.5 * P.ampPeakScale * psyLv, t + 0.0035);
+              ampGain.gain.exponentialRampToValueAtTime(0.36 * P.ampSus1Scale * psyLv, t + isPsyBass ? 0.1 : 0.07);
+              ampGain.gain.exponentialRampToValueAtTime(0.14 * P.ampSus2Scale * psyLv, t + isPsyBass ? 0.48 : 0.32);
 
               sub = audio.createOscillator();
               sub.type = "sine";
@@ -6799,26 +6814,28 @@
               sub.detune.setValueAtTime((Math.random() - 0.5) * Math.min(18, dtc * 0.75), t);
               subGain = audio.createGain();
               subGain.gain.setValueAtTime(0.0001, t);
-              subGain.gain.exponentialRampToValueAtTime(0.14 * P.subScale, t + 0.012);
-              subGain.gain.exponentialRampToValueAtTime(0.075 * P.subScale, t + 0.085);
+              const subMul = isPsyBass ? 0.52 : 1;
+              subGain.gain.exponentialRampToValueAtTime(0.14 * P.subScale * subMul, t + 0.012);
+              subGain.gain.exponentialRampToValueAtTime(0.075 * P.subScale * subMul, t + 0.085);
 
               filt = audio.createBiquadFilter();
               filt.type = "lowpass";
               const Qpk = Math.min(22, Math.max(6.5, Math.min(17.5, Math.max(9.2, 11.8 + fc * 0.0075)) * P.qScale));
-              filt.Q.setValueAtTime(Qpk, t);
-              const fOpen = Math.min(12000, Math.min(10400, fc * 24 + 720) * P.fOpenScale);
+              filt.Q.setValueAtTime(isPsyBass ? Qpk * 0.68 : Qpk, t);
+              const fOpenBase = Math.min(10400, fc * 24 + 720) * P.fOpenScale;
+              const fOpen = Math.min(12000, isPsyBass ? fOpenBase * 0.55 : fOpenBase);
               const fSus = Math.max(80, Math.min(720, Math.max(105, Math.min(620, fc * 1.02 + 88)) * P.fSusScale));
               filt.frequency.setValueAtTime(fOpen, t);
-              filt.frequency.exponentialRampToValueAtTime(Math.max(fSus * 1.15, 160), t + isPsyBass ? 0.11 : 0.078);
-              filt.frequency.exponentialRampToValueAtTime(fSus, t + isPsyBass ? 0.38 : 0.24);
+              filt.frequency.exponentialRampToValueAtTime(Math.max(fSus * 1.08, 140), t + isPsyBass ? 0.14 : 0.078);
+              filt.frequency.exponentialRampToValueAtTime(fSus * (isPsyBass ? 0.88 : 1), t + isPsyBass ? 0.42 : 0.24);
               filt.frequency.exponentialRampToValueAtTime(
-                isPsyBass ? Math.max(95, fSus * 0.52) : fSus * 0.98,
-                t + isPsyBass ? 0.78 : 0.52
+                isPsyBass ? Math.max(72, fSus * 0.42) : fSus * 0.98,
+                t + isPsyBass ? 0.88 : 0.52
               );
 
               const drive = audio.createWaveShaper();
               const curve = new Float32Array(1024);
-              const driveAmt = isPsyBass ? P.driveAmt * 1.12 : P.driveAmt;
+              const driveAmt = isPsyBass ? P.driveAmt * 0.52 : P.driveAmt;
               for (let i = 0; i < 1024; i++) {
                 const x = (i / 1023) * 2 - 1;
                 curve[i] = Math.tanh(x * driveAmt);
@@ -6831,8 +6848,8 @@
               resPeak.frequency.setValueAtTime(peakF, t);
               resPeak.Q.setValueAtTime(P.peakQ, t);
               resPeak.gain.setValueAtTime(0, t);
-              resPeak.gain.linearRampToValueAtTime(P.peakGainAtk * (isPsyBass ? 1.15 : 1), t + 0.028);
-              resPeak.gain.linearRampToValueAtTime(P.peakGainSus * (isPsyBass ? 1.08 : 1), t + 0.1);
+              resPeak.gain.linearRampToValueAtTime(P.peakGainAtk * (isPsyBass ? 0.22 : 1), t + 0.028);
+              resPeak.gain.linearRampToValueAtTime(P.peakGainSus * (isPsyBass ? 0.18 : 1), t + 0.1);
 
               const dL = audio.createDelay(0.02);
               const dR = audio.createDelay(0.02);
@@ -6860,6 +6877,7 @@
               gR.connect(merger, 0, 1);
               merger.connect(outGain);
               outGain.connect(playerDry);
+              if (isPsyBass) outGain.gain.value = P.outGain * 0.72;
             }
 
             let noctVib = null;
@@ -6868,7 +6886,7 @@
               noctVib.type = "sine";
               noctVib.frequency.setValueAtTime(3.05 + (fc % 55) * 0.035, t);
               const vg = audio.createGain();
-              vg.gain.value = 30;
+              vg.gain.value = 11;
               noctVib.connect(vg);
               vg.connect(carrier.detune);
               noctVib.start(t);
@@ -7167,6 +7185,20 @@
           }
         }
 
+        /** Bump the nocturne band NPC for `role` ("bass" | "synth" | "drums") so they jump/dance on their hits. */
+        function pulseNocturneComposer(role, impulseY, exciteAdd) {
+          if (typeof impulseY !== "number") impulseY = 2.1;
+          if (typeof exciteAdd !== "number") exciteAdd = 0.3;
+          for (let pi = 0; pi < npcs.length; pi++) {
+            const nn = npcs[pi];
+            if (nn.nocturneComposer && nn.nocturneRole === role) {
+              nn.noctJumpVy = (nn.noctJumpVy || 0) + impulseY;
+              nn.noctPlayExcite = Math.min(1.4, (nn.noctPlayExcite || 0) + exciteAdd);
+              break;
+            }
+          }
+        }
+
         /** Two-bar 16th grid (~118 BPM): kick / snare / hats / cym — steady Latin pocket. */
         const NOCTURN_LATIN_DRUMS = [
           "kick",
@@ -7203,37 +7235,155 @@
           "cym"
         ];
 
+        /**
+         * Shared harmony for the nocturne trio: **Am – F – C – G** (vi–IV–I–V in C), one chord per ~6.25s phrase.
+         * Bass spells roots / arpeggios; glass lead uses chord tones on fixed rhythmic slots so changes line up.
+         */
+        const NOCTURN_CHORD_CYCLE = [
+          {
+            bass: [
+              "Digit6",
+              "Digit3",
+              "Digit1",
+              "Digit3",
+              "Digit6",
+              "Digit1",
+              "Digit3",
+              "Digit6",
+              "Digit3",
+              "Digit1",
+              "Digit6",
+              "Digit3"
+            ],
+            lead: [
+              { c: "Digit6", t: 140 },
+              { c: "Digit8", t: 580 },
+              { c: "Digit3", t: 1020 },
+              { c: "Digit8", t: 1560 },
+              { c: "Digit3", t: 2180 },
+              { c: "Digit6", t: 2760 },
+              { c: "Digit3", t: 3420 },
+              { c: "Digit8", t: 4140 }
+            ]
+          },
+          {
+            bass: [
+              "Digit4",
+              "Digit1",
+              "Digit6",
+              "Digit1",
+              "Digit4",
+              "Digit6",
+              "Digit1",
+              "Digit4",
+              "Digit1",
+              "Digit6",
+              "Digit4",
+              "Digit6"
+            ],
+            lead: [
+              { c: "Digit4", t: 130 },
+              { c: "Digit6", t: 560 },
+              { c: "Digit8", t: 1000 },
+              { c: "Digit1", t: 1620 },
+              { c: "Digit4", t: 2240 },
+              { c: "Digit8", t: 2820 },
+              { c: "Digit6", t: 3520 },
+              { c: "Digit1", t: 4200 }
+            ]
+          },
+          {
+            bass: [
+              "Digit1",
+              "Digit5",
+              "Digit3",
+              "Digit5",
+              "Digit1",
+              "Digit3",
+              "Digit5",
+              "Digit1",
+              "Digit5",
+              "Digit3",
+              "Digit1",
+              "Digit5"
+            ],
+            lead: [
+              { c: "Digit5", t: 120 },
+              { c: "Digit8", t: 600 },
+              { c: "Digit3", t: 1040 },
+              { c: "Digit5", t: 1640 },
+              { c: "Digit1", t: 2280 },
+              { c: "Digit5", t: 2900 },
+              { c: "Digit8", t: 3580 },
+              { c: "Digit3", t: 4260 }
+            ]
+          },
+          {
+            bass: [
+              "Digit5",
+              "Digit2",
+              "Digit7",
+              "Digit2",
+              "Digit5",
+              "Digit7",
+              "Digit2",
+              "Digit5",
+              "Digit2",
+              "Digit7",
+              "Digit5",
+              "Digit2"
+            ],
+            lead: [
+              { c: "Digit5", t: 125 },
+              { c: "Digit7", t: 550 },
+              { c: "Digit2", t: 980 },
+              { c: "Digit5", t: 1580 },
+              { c: "Digit8", t: 2200 },
+              { c: "Digit7", t: 2860 },
+              { c: "Digit2", t: 3480 },
+              { c: "Digit5", t: 4180 }
+            ]
+          }
+        ];
+
         function playNocturneLatinDrumStep(step) {
           if (FmBellSynth.isEngineMuted()) return;
           const k = NOCTURN_LATIN_DRUMS[step % NOCTURN_LATIN_DRUMS.length];
-          if (k) FmBellSynth.triggerDrum(k);
+          if (k) {
+            FmBellSynth.triggerDrum(k);
+            let imp = 1.35;
+            let ex = 0.22;
+            if (k === "kick") {
+              imp = 3.75;
+              ex = 0.56;
+            } else if (k === "snare") {
+              imp = 3.05;
+              ex = 0.5;
+            } else if (k === "cym") {
+              imp = 2.65;
+              ex = 0.44;
+            } else if (k === "hat") {
+              imp = 1.5;
+              ex = 0.2;
+            }
+            pulseNocturneComposer("drums", imp, ex);
+          }
         }
 
         /** Longer legato bassline + `bassNoctPsy_` path (triangle FM + vibrato + slow filter dive). */
         function playNocturnePsyBassPhrase(phraseIx) {
           if (FmBellSynth.isEngineMuted()) return;
-          const prog = [
-            "Digit2",
-            "Digit3",
-            "Digit5",
-            "Digit4",
-            "Digit3",
-            "Digit2",
-            "Digit4",
-            "Digit5",
-            "Digit3",
-            "Digit2",
-            "Digit5",
-            "Digit4"
-          ];
-          for (let i = 0; i < prog.length; i++) {
-            const code = prog[(phraseIx * 2 + i * 3 + (phraseIx >> 1)) % prog.length];
+          const chord = NOCTURN_CHORD_CYCLE[phraseIx % NOCTURN_CHORD_CYCLE.length];
+          const parts = chord.bass;
+          for (let i = 0; i < parts.length; i++) {
+            const code = parts[i];
             const hz = FM_BASS_HZ[code];
             const id = "bassNoctPsy_" + phraseIx + "_" + i;
-            const delayMs = i * 315 + ((phraseIx + i * 5) % 7) * 55;
-            const dur = 540 + (i % 4) * 95 + (phraseIx % 4) * 35;
+            const delayMs = i * 515 + ((phraseIx + i * 5) % 7) * 42;
+            const dur = 560 + (i % 3) * 88 + (phraseIx % 3) * 28;
             setTimeout(function () {
               FmBellSynth.noteOn(id, hz, code);
+              pulseNocturneComposer("bass", 1.92, 0.26);
               setTimeout(function () {
                 FmBellSynth.noteOff(id);
               }, dur);
@@ -7241,35 +7391,20 @@
           }
         }
 
-        /** Sparse `noctLead_` glass FM — phrase-seeded random timing + pitch choices (improv over the grid). */
+        /** Glass FM lead: same chord as bass for this phrase (`NOCTURN_CHORD_CYCLE`), voiced on chord tones in time. */
         function playNocturneLeadImprov(phraseIx) {
           if (FmBellSynth.isEngineMuted()) return;
-          const pool = [
-            "Digit5",
-            "Digit6",
-            "Digit8",
-            "Digit7",
-            "Digit9",
-            "Digit8",
-            "Digit6",
-            "Digit4",
-            "Digit5",
-            "Digit7"
-          ];
-          let seed = ((phraseIx + 1) * 1103515245 + 12345) >>> 0;
-          function rnd() {
-            seed = (seed * 1664525 + 1013904223) >>> 0;
-            return seed / 4294967296;
-          }
-          const n = 4 + ((phraseIx * 5) % 5);
-          for (let i = 0; i < n; i++) {
-            const pick = pool[(phraseIx * 3 + i * 7 + Math.floor(rnd() * 5)) % pool.length];
+          const chord = NOCTURN_CHORD_CYCLE[phraseIx % NOCTURN_CHORD_CYCLE.length];
+          const hits = chord.lead;
+          for (let i = 0; i < hits.length; i++) {
+            const pick = hits[i].c;
             const fc = FM_BELL_HZ[pick];
             const id = "noctLead_" + phraseIx + "_" + i;
-            const delayMs = 80 + Math.floor(rnd() * 4800) + i * 140;
-            const dur = 150 + Math.floor(rnd() * 260);
+            const delayMs = hits[i].t + ((phraseIx * 13 + i * 17) % 90);
+            const dur = 175 + (i % 3) * 52 + (phraseIx % 2) * 40;
             setTimeout(function () {
               FmBellSynth.noteOn(id, fc);
+              pulseNocturneComposer("synth", 1.55, 0.24);
               setTimeout(function () {
                 FmBellSynth.noteOff(id);
               }, dur);
@@ -7318,11 +7453,44 @@
 
             if (n.nocturneComposer) {
               const segHalfH = 0.18 * CHARACTER_SCALE * NPC_SCALE;
-              const gy = sampleSurfaceY(g.position.x, g.position.z);
-              if (gy != null) {
-                g.position.y = gy + segHalfH;
+              if (n.noctAnchorX == null) {
+                n.noctAnchorX = g.position.x;
+                n.noctAnchorZ = g.position.z;
+                n.noctAnchorRy = g.rotation.y;
               }
-              n.huePhase += dt * 0.28;
+              const ax = n.noctAnchorX;
+              const az = n.noctAnchorZ;
+              const gy = sampleSurfaceY(ax, az);
+              const floorY = (gy != null ? gy : g.position.y - segHalfH) + segHalfH;
+
+              n.noctPlayExcite = (n.noctPlayExcite || 0) * Math.exp(-dt * 2.65);
+              n.noctDanceT = (n.noctDanceT || 0) + dt * (5.8 + n.noctPlayExcite * 11);
+              const ex = n.noctPlayExcite || 0;
+              const sway = 0.1 + ex * 0.26;
+              const bobX =
+                Math.sin(n.noctDanceT * 1.85) * sway +
+                Math.sin(n.noctDanceT * 3.05 + 0.7) * sway * 0.38;
+              const bobZ =
+                Math.cos(n.noctDanceT * 1.62) * sway * 0.95 +
+                Math.cos(n.noctDanceT * 2.75 + 1.1) * sway * 0.32;
+
+              n.noctJumpVy = (n.noctJumpVy || 0) + gravity * dt;
+              n.noctOffY = (n.noctOffY || 0) + n.noctJumpVy * dt;
+              if (n.noctOffY <= 0) {
+                n.noctOffY = 0;
+                if (n.noctJumpVy < 0) n.noctJumpVy = 0;
+              }
+
+              g.position.x = ax + bobX;
+              g.position.z = az + bobZ;
+              g.position.y = floorY + (n.noctOffY || 0);
+              const ry0 = n.noctAnchorRy != null ? n.noctAnchorRy : g.rotation.y;
+              g.rotation.y =
+                ry0 +
+                Math.sin(n.noctDanceT * 2.35) * (0.11 + ex * 0.22) +
+                Math.sin(n.noctDanceT * 5.1 + 0.4) * 0.055 * ex;
+
+              n.huePhase += dt * (0.28 + ex * 0.45);
               let baseHue = 0.74;
               if (n.nocturneRole === "bass") baseHue = 0.82;
               else if (n.nocturneRole === "synth") baseHue = 0.57;
