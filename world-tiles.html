@@ -3432,7 +3432,7 @@
               for (let i = 0; i < spots.length; i++) {
                 const sx = spots[i][0];
                 const sz = spots[i][1];
-                const smat = spots[i][2];
+                const smat = spots[i][2].clone();
                 const p = new THREE.Mesh(plinth, marbleShadow);
                 p.position.set(sx, GROUND_SURFACE_Y + 0.275, sz);
                 scene.add(p);
@@ -3440,7 +3440,10 @@
                 shadowPickables.push(p);
                 const g = new THREE.Mesh(new THREE.OctahedronGeometry(0.45, 0), smat);
                 g.position.set(sx, GROUND_SURFACE_Y + 0.85, sz);
+                g.userData.greekCourtyardCrystal = true;
                 scene.add(g);
+                groundPickables.push(g);
+                shadowPickables.push(g);
               }
             })();
 
@@ -5527,6 +5530,7 @@
           Digit0: 1318.5
         };
         const FM_BELL_SCALE_CODES = Object.keys(FM_BELL_HZ);
+        let greekCrystalBellSeq = 0;
         let primordialNexusSeq = 0;
         /** `primordium` map: raycast hit on the metabolic core plays an evolving FM-bell arpeggio. */
         function tryHitPrimordialMetabolizer(groundHit) {
@@ -5573,6 +5577,33 @@
             o = o.parent;
           }
           return false;
+        }
+        /** Greek temple (`tesseract`): courtyard corner crystals — click for random hue + crystal bell. */
+        function tryHitGreekCourtyardCrystal(groundHit) {
+          if (!useTesseractMap || !groundHit || !groundHit.object) return false;
+          const o = groundHit.object;
+          const u = o.userData;
+          const mat = o.material;
+          if (!u || !u.greekCourtyardCrystal || !mat) return false;
+          try {
+            FmBellSynth.unlock();
+          } catch (eCry) {}
+          const codes = FM_BELL_SCALE_CODES;
+          const code = codes[(Math.random() * codes.length) | 0];
+          const hz = FM_BELL_HZ[code];
+          const id = "npcBell_crys_" + greekCrystalBellSeq++;
+          FmBellSynth.noteOn(id, hz);
+          setTimeout(function () {
+            FmBellSynth.noteOff(id);
+          }, 300 + Math.floor(Math.random() * 480));
+          const hue = Math.random();
+          const c = new THREE.Color().setHSL(hue, 0.82, 0.5 + Math.random() * 0.14);
+          mat.color.copy(c);
+          if (mat.emissive) {
+            mat.emissive.copy(c).multiplyScalar(0.18 + Math.random() * 0.14);
+            mat.emissiveIntensity = 0.38 + Math.random() * 0.48;
+          }
+          return true;
         }
         const FM_BASS_HZ = {
           Digit1: 523.26 / 8,
@@ -8374,6 +8405,7 @@
         addEventListener("pointerdown", (e) => {
           if (e.pointerType === "touch") return;
           const groundHit = raycastGround(e.clientX, e.clientY);
+          if (tryHitGreekCourtyardCrystal(groundHit)) return;
           if (tryHitPrimordialMetabolizer(groundHit)) return;
           if (groundHit) {
             clickTarget.copy(groundHit.point);
@@ -8617,6 +8649,10 @@
               dx * dx + dy * dy <= TAP_MAX_PX * TAP_MAX_PX
             ) {
               const groundHit = raycastGround(t.clientX, t.clientY);
+              if (tryHitGreekCourtyardCrystal(groundHit)) {
+                mobileTapCandidate = null;
+                return;
+              }
               if (tryHitPrimordialMetabolizer(groundHit)) {
                 mobileTapCandidate = null;
                 return;
