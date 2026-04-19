@@ -613,7 +613,7 @@
             const ls = localStorage.getItem(LS_MAP_MODE);
             if (MAP_MODE_IDS.indexOf(ls) >= 0) return ls;
           } catch (e2) {}
-          return MAP_MODE_IDS[0];
+          return "board";
         }
         const mapMode = readMapMode();
         const useBoardMap = mapMode === "board";
@@ -1960,7 +1960,10 @@
                   const sdfRange = 16.0; // texels; line placement uses this scale
                   const sdf = new Uint8Array(maskRes * maskRes);
                   for (let i = 0; i < sdf.length; i++) {
-                    let sd = dToLand[i] - dToWater[i];
+                    // Want: negative in water, positive on land.
+                    // dToLand = dist to nearest land pixel, dToWater = dist to nearest water pixel.
+                    // So water pixels have dToWater=0 and land pixels have dToLand=0.
+                    let sd = dToWater[i] - dToLand[i];
                     if (sd > sdfRange) sd = sdfRange;
                     if (sd < -sdfRange) sd = -sdfRange;
                     const enc = Math.round(((sd / sdfRange) * 0.5 + 0.5) * 255);
@@ -2056,7 +2059,6 @@
                   uniforms: {
                     waterMap: { value: tex },
                     uLandMaskSoft: { value: landMaskSoftTex },
-                    uLandMaskHard: { value: landMaskHardTex },
                     uLandSdf: { value: landSdfTex },
                     uLandSdfRange: { value: landSdfRange },
                     uWorldHalf: { value: new THREE.Vector2(WORLD_HALF_X, WORLD_HALF_Z) },
@@ -2078,17 +2080,15 @@
                   toneMapped: false,
                   vertexShader:
                     "varying vec2 vUv;\n" +
-                    "varying vec2 vWorldXZ;\n" +
+                    "varying highp vec3 vWorldPos;\n" +
                     "void main() {\n" +
                     "  vUv = uv;\n" +
-                    "  vec4 wp = modelMatrix * vec4(position, 1.0);\n" +
-                    "  vWorldXZ = wp.xz;\n" +
+                    "  vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;\n" +
                     "  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);\n" +
                     "}\n",
                   fragmentShader:
                     "uniform sampler2D waterMap;\n" +
                     "uniform sampler2D uLandMaskSoft;\n" +
-                    "uniform sampler2D uLandMaskHard;\n" +
                     "uniform sampler2D uLandSdf;\n" +
                     "uniform float uLandSdfRange;\n" +
                     "uniform vec2 uWorldHalf;\n" +
@@ -2098,7 +2098,7 @@
                     "uniform float uOpacity;\n" +
                     "uniform vec2 uUvScale;\n" +
                     "varying vec2 vUv;\n" +
-                    "varying vec2 vWorldXZ;\n" +
+                    "varying highp vec3 vWorldPos;\n" +
                     "float hash21(vec2 p) {\n" +
                     "  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);\n" +
                     "}\n" +
@@ -2124,6 +2124,9 @@
                     "}\n" +
                     "void main() {\n" +
                     "  float t = uTime;\n" +
+                    "  // Use vertex world position (highp) for masks — do NOT derive XZ from vUv * oceanExtent in mediump\n" +
+                    "  // fragment shaders (quantizes ~1e-4 UVs × 24000 → tens of units of shoreline slip / wrong outline).\n" +
+                    "  highp vec2 wWorld = vWorldPos.xz;\n" +
                     "  vec2 baseUv = vUv * uUvScale;\n" +
                     "  vec2 adv1 = vec2(0.93, 0.39) * t * 0.045;\n" +
                     "  vec2 adv2 = vec2(-0.61, 0.82) * t * 0.033;\n" +
@@ -2181,23 +2184,13 @@
                     "  rgb += vec3(0.58, 0.78, 0.92) * bloom * 0.22;\n" +
                     "  float spark = smoothstep(0.94, 1.0, noise2(uvAnim * 48.0 + t * 0.14)) * 0.018;\n" +
                     "  rgb += vec3(0.75, 0.88, 1.0) * spark;\n" +
-                    "  vec2 maskUv = (vWorldXZ + uWorldHalf) / max(uWorldSpan, vec2(0.0001));\n" +
+                    "  vec2 maskUv = (wWorld + uWorldHalf) / max(uWorldSpan, vec2(0.0001));\n" +
                     "  maskUv = clamp(maskUv, 0.0, 1.0);\n" +
                     "  // Anti-aliased shoreline from the (blurred) land mask.\n" +
                     "  float landSoft = texture2D(uLandMaskSoft, maskUv).r;\n" +
-                    "  float landHard = texture2D(uLandMaskHard, maskUv).r;\n" +
                     "  // Signed distance field (in mask texels): negative in water, positive on land.\n" +
                     "  float sd = (texture2D(uLandSdf, maskUv).r * 2.0 - 1.0) * uLandSdfRange;\n" +
-                    "  // Foam on the SDF zero (true land/water boundary), tiny jitter into water only.\n" +
-                    "  float wob = (noise2(vWorldXZ * 0.14 + vec2(t * 0.10, -t * 0.08)) - 0.5) * 0.12;\n" +
-                    "  float target = -0.04 + wob;\n" +
-                    "  float lineW = 0.40 + 0.18 * noise2(vWorldXZ * 0.21 + vec2(-t * 0.12, t * 0.11));\n" +
-                    "  float coastLine = 1.0 - smoothstep(lineW * 0.55, lineW, abs(sd - target));\n" +
-                    "  // Suppress foam in open ocean; keep narrow band around shoreline in mask space.\n" +
-                    "  float edgeMask = 1.0 - smoothstep(0.12, 0.52, abs(landHard - 0.5));\n" +
-                    "  coastLine *= edgeMask;\n" +
-                    "  vec3 lineCol = vec3(0.95, 0.98, 1.0);\n" +
-                    "  rgb += lineCol * coastLine * 0.58;\n" +
+                    "  // Foam is drawn as real geometry (shore ribbon) so it matches the exact terrain boundary.\n" +
                     "  float alpha = texel.a * uOpacity;\n" +
                     "  // Keep water consistent; soft mask is kept for possible future use.\n" +
                     "  rgb = rgb + landSoft * 0.0;\n" +
@@ -2774,312 +2767,356 @@
               const z = (Math.random() * 2 - 1) * 58;
               landSpawnList.push({ x: x, z: z, b: 1, ix: 0, iz: 0 });
             }
-            tileWorldSpawn = { x: 0, z: 0 };
+            // Diagonal toward the yellow pyramid (-cornerXZ,-cornerXZ); outside center spiral (~8m half-axis).
+            tileWorldSpawn = { x: -26, z: -26 };
           })();
         } else {
           (function buildTesseractWorld() {
-            // Trippy mirror labyrinth world: walkable mirrored floor + liquid-glass mirror walls.
-            mapBoardHalfExtent = 70;
-            // Spawn a bunch of points so NPCs can exist; keep them near origin.
-            for (let si = 0; si < 420; si++) {
-              const x = (Math.random() * 2 - 1) * 46;
-              const z = (Math.random() * 2 - 1) * 46;
+            // Greek-style white marble temple, courtyard, central pond; white/gold + red/blue/yellow gem accents.
+            mapBoardHalfExtent = 92;
+            tesseractGlassMat = null;
+            tesseractFractal = null;
+            tesseractDragon = null;
+
+            const pondCx = 0;
+            const pondCz = 8;
+            const pondW = 40;
+            const pondD = 28;
+            const inPond2 = function (x, z) {
+              const dx = (x - pondCx) / (pondW * 0.5);
+              const dz = (z - pondCz) / (pondD * 0.5);
+              return dx * dx + dz * dz < 1.02;
+            };
+
+            for (let si = 0; si < 520; si++) {
+              const x = (Math.random() * 2 - 1) * 72;
+              const z = (Math.random() * 2 - 1) * 72;
+              if (inPond2(x, z)) continue;
               landSpawnList.push({ x: x, z: z, b: 1, ix: 0, iz: 0 });
             }
-            tileWorldSpawn = { x: 0, z: 0 };
+            tileWorldSpawn = { x: 0, z: -8 };
 
-            const floorGeo = new THREE.PlaneGeometry(160, 160, 1, 1);
-            const floorMat = new THREE.MeshStandardMaterial({
-              color: 0xcfe9ff,
-              roughness: 0.08,
-              metalness: 0.55,
-              emissive: new THREE.Color(0x1a2a3a),
-              emissiveIntensity: 0.18
+            const floorSize = 220;
+            const floorSegs = 80;
+            const courtGeo = new THREE.PlaneGeometry(floorSize, floorSize, floorSegs, floorSegs);
+            courtGeo.rotateX(-Math.PI / 2);
+            const vCol = new Float32Array(courtGeo.attributes.position.count * 3);
+            const marbleBase = new THREE.Color(0xf6f4ef);
+            const marbleCool = new THREE.Color(0xeae6de);
+            for (let i = 0; i < courtGeo.attributes.position.count; i++) {
+              const x = courtGeo.attributes.position.getX(i);
+              const z = courtGeo.attributes.position.getZ(i);
+              const n =
+                Math.sin(x * 0.045) * 0.5 + Math.cos(z * 0.042) * 0.5 + Math.sin((x * 0.7 + z) * 0.028) * 0.4;
+              const t = THREE.MathUtils.clamp(0.5 + n * 0.18, 0, 1);
+              const c = marbleBase.clone().lerp(marbleCool, t);
+              vCol[i * 3] = c.r;
+              vCol[i * 3 + 1] = c.g;
+              vCol[i * 3 + 2] = c.b;
+            }
+            courtGeo.setAttribute("color", new THREE.BufferAttribute(vCol, 3));
+            const courtMat = new THREE.MeshStandardMaterial({
+              vertexColors: true,
+              roughness: 0.55,
+              metalness: 0.02,
+              envMapIntensity: 0.35
             });
-            const floor = new THREE.Mesh(floorGeo, floorMat);
-            floor.rotation.x = -Math.PI / 2;
-            floor.position.set(0, GROUND_SURFACE_Y, 0);
-            floor.receiveShadow = false;
-            floor.userData.tileKey = "mirror_labyrinth_floor";
-            floor.userData.solid = true;
-            scene.add(floor);
-            groundPickables.push(floor);
-            shadowPickables.push(floor);
+            const courtyard = new THREE.Mesh(courtGeo, courtMat);
+            courtyard.position.set(0, GROUND_SURFACE_Y, 0);
+            courtyard.receiveShadow = false;
+            courtyard.userData.tileKey = "greek_courtyard_floor";
+            courtyard.userData.solid = true;
+            scene.add(courtyard);
+            groundPickables.push(courtyard);
+            shadowPickables.push(courtyard);
 
-            function createLiquidGlassMaterial() {
-              const mat = new THREE.ShaderMaterial({
+            const pondBedY = GROUND_SURFACE_Y - 0.55;
+            const pondSurfaceY = GROUND_SURFACE_Y - 0.06;
+            const pondBed = new THREE.Mesh(
+              new THREE.PlaneGeometry(pondW * 0.98, pondD * 0.98, 1, 1),
+              new THREE.MeshStandardMaterial({ color: 0x2a4a52, roughness: 1, metalness: 0 })
+            );
+            pondBed.rotation.x = -Math.PI / 2;
+            pondBed.position.set(pondCx, pondBedY, pondCz);
+            pondBed.userData.tileKey = "greek_pond_bed";
+            pondBed.userData.solid = true;
+            scene.add(pondBed);
+            groundPickables.push(pondBed);
+            shadowPickables.push(pondBed);
+
+            const pondWater = new THREE.Mesh(
+              new THREE.PlaneGeometry(pondW * 0.96, pondD * 0.96, 1, 1),
+              new THREE.MeshPhysicalMaterial({
+                color: 0x4a9ec4,
+                metalness: 0.02,
+                roughness: 0.11,
                 transparent: true,
-                depthWrite: false,
-                depthTest: true,
-                side: THREE.DoubleSide,
-                toneMapped: false,
-                uniforms: {
-                  uTime: { value: 0 },
-                  uTint: { value: new THREE.Vector3(0.78, 0.92, 1.0) },
-                  uTint2: { value: new THREE.Vector3(0.45, 0.78, 1.0) },
-                  uOpacity: { value: 0.48 }
-                },
-                vertexShader:
-                  "uniform float uTime;\n" +
-                  "varying vec3 vWp;\n" +
-                  "varying vec3 vN;\n" +
-                  "float h3(vec3 p){ return fract(sin(dot(p, vec3(127.1,311.7,74.7))) * 43758.5453); }\n" +
-                  "float n3(vec3 x){ vec3 i=floor(x), f=fract(x); f=f*f*(3.0-2.0*f);\n" +
-                  "  float a=h3(i);\n" +
-                  "  float b=h3(i+vec3(1,0,0));\n" +
-                  "  float c=h3(i+vec3(0,1,0));\n" +
-                  "  float d=h3(i+vec3(1,1,0));\n" +
-                  "  float e=h3(i+vec3(0,0,1));\n" +
-                  "  float f1=h3(i+vec3(1,0,1));\n" +
-                  "  float g=h3(i+vec3(0,1,1));\n" +
-                  "  float h=h3(i+vec3(1,1,1));\n" +
-                  "  float x1=mix(a,b,f.x);\n" +
-                  "  float x2=mix(c,d,f.x);\n" +
-                  "  float x3=mix(e,f1,f.x);\n" +
-                  "  float x4=mix(g,h,f.x);\n" +
-                  "  float y1=mix(x1,x2,f.y);\n" +
-                  "  float y2=mix(x3,x4,f.y);\n" +
-                  "  return mix(y1,y2,f.z);\n" +
-                  "}\n" +
-                  "void main(){\n" +
-                  "  vec3 p = position;\n" +
-                  "  float t = uTime;\n" +
-                  "  float w = n3(p*1.35 + vec3(0.0, t*0.32, t*0.21));\n" +
-                  "  vec3 warp = normalize(normal + vec3(0.22,0.16,0.18)) * (w - 0.5) * 0.18;\n" +
-                  "  p += warp;\n" +
-                  "  vec4 wp = modelMatrix * vec4(p,1.0);\n" +
-                  "  vWp = wp.xyz;\n" +
-                  "  vN = normalize(normalMatrix * normal);\n" +
-                  "  gl_Position = projectionMatrix * viewMatrix * wp;\n" +
-                  "}\n",
-                fragmentShader:
-                  "uniform float uTime;\n" +
-                  "uniform vec3 uTint;\n" +
-                  "uniform vec3 uTint2;\n" +
-                  "uniform float uOpacity;\n" +
-                  "varying vec3 vWp;\n" +
-                  "varying vec3 vN;\n" +
-                  "vec3 envCol(vec3 r){\n" +
-                  "  // Fake environment: horizon gradient + subtle spectral sheen.\n" +
-                  "  float h = clamp(r.y * 0.5 + 0.5, 0.0, 1.0);\n" +
-                  "  vec3 sky0 = vec3(0.09, 0.16, 0.25);\n" +
-                  "  vec3 sky1 = vec3(0.55, 0.78, 0.95);\n" +
-                  "  vec3 c = mix(sky0, sky1, smoothstep(0.0, 1.0, h));\n" +
-                  "  float s = sin((r.x + r.z) * 8.0 + uTime * 0.7) * 0.5 + 0.5;\n" +
-                  "  c += vec3(0.25, 0.45, 0.65) * s * 0.08;\n" +
-                  "  return c;\n" +
-                  "}\n" +
-                  "float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }\n" +
-                  "float n2(vec2 x){ vec2 i=floor(x), f=fract(x); f=f*f*(3.0-2.0*f);\n" +
-                  "  float a=h2(i);\n" +
-                  "  float b=h2(i+vec2(1,0));\n" +
-                  "  float c=h2(i+vec2(0,1));\n" +
-                  "  float d=h2(i+vec2(1,1));\n" +
-                  "  return mix(mix(a,b,f.x), mix(c,d,f.x), f.y);\n" +
-                  "}\n" +
-                  "void main(){\n" +
-                  "  vec3 N = normalize(vN);\n" +
-                  "  vec3 V = normalize(cameraPosition - vWp);\n" +
-                  "  float fres = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 4.0);\n" +
-                  "  vec3 R = reflect(-V, N);\n" +
-                  "  float t = uTime;\n" +
-                  "  vec2 p = vWp.xz * 0.22;\n" +
-                  "  float ripple = n2(p + vec2(t*0.12, -t*0.09));\n" +
-                  "  float ripple2 = n2(p*1.9 + vec2(-t*0.07, t*0.11));\n" +
-                  "  float glass = (ripple*0.6 + ripple2*0.4);\n" +
-                  "  vec3 col = mix(uTint2, uTint, smoothstep(0.18, 0.86, glass));\n" +
-                  "  float edge = smoothstep(0.0, 1.0, fres);\n" +
-                  "  vec3 env = envCol(R);\n" +
-                  "  col = mix(col, env, 0.55 * edge);\n" +
-                  "  col += vec3(1.0) * edge * 0.38;\n" +
-                  "  // subtle internal caustic shimmer\n" +
-                  "  col += vec3(0.7, 0.9, 1.0) * (glass - 0.5) * 0.10;\n" +
-                  "  float alpha = uOpacity * (0.55 + 0.45 * edge);\n" +
-                  "  gl_FragColor = vec4(col, alpha);\n" +
-                  "}\n"
-              });
-              return mat;
-            }
+                opacity: 0.82,
+                transmission: 0.62,
+                thickness: 0.85,
+                ior: 1.33,
+                envMapIntensity: 0.85,
+                clearcoat: 0.35,
+                clearcoatRoughness: 0.2,
+                depthWrite: false
+              })
+            );
+            pondWater.rotation.x = -Math.PI / 2;
+            pondWater.position.set(pondCx, pondSurfaceY, pondCz);
+            pondWater.renderOrder = 5;
+            pondWater.userData.tileKey = "greek_pond_water";
+            pondWater.userData.solid = false;
+            scene.add(pondWater);
+            groundPickables.push(pondWater);
+            shadowPickables.push(pondWater);
 
-            function addMirrorLabyrinthWorld() {
-              const group = new THREE.Group();
-              group.position.set(0, GROUND_SURFACE_Y, 0);
-              group.renderOrder = 2;
-              scene.add(group);
+            const rimMat = new THREE.MeshStandardMaterial({
+              color: 0xefede6,
+              roughness: 0.45,
+              metalness: 0.03,
+              envMapIntensity: 0.4
+            });
+            const rimH = 0.38;
+            const rimT = 0.55;
+            (function addPondRim() {
+              const wx = pondW * 0.5 + rimT;
+              const wz = pondD * 0.5 + rimT;
+              const longX = new THREE.Mesh(new THREE.BoxGeometry(wx * 2, rimH, rimT), rimMat);
+              longX.position.set(pondCx, GROUND_SURFACE_Y + rimH * 0.5, pondCz + wz + rimT * 0.5);
+              scene.add(longX);
+              groundPickables.push(longX);
+              shadowPickables.push(longX);
+              const longX2 = longX.clone();
+              longX2.position.set(pondCx, GROUND_SURFACE_Y + rimH * 0.5, pondCz - wz - rimT * 0.5);
+              scene.add(longX2);
+              groundPickables.push(longX2);
+              shadowPickables.push(longX2);
+              const longZ = new THREE.Mesh(new THREE.BoxGeometry(rimT, rimH, pondD + rimT * 2), rimMat);
+              longZ.position.set(pondCx + wx + rimT * 0.5, GROUND_SURFACE_Y + rimH * 0.5, pondCz);
+              scene.add(longZ);
+              groundPickables.push(longZ);
+              shadowPickables.push(longZ);
+              const longZ2 = longZ.clone();
+              longZ2.position.set(pondCx - wx - rimT * 0.5, GROUND_SURFACE_Y + rimH * 0.5, pondCz);
+              scene.add(longZ2);
+              groundPickables.push(longZ2);
+              shadowPickables.push(longZ2);
+            })();
 
-              const wallMat = createLiquidGlassMaterial();
-              // Drive glass animation off the global tesseractGlassMat timer.
-              tesseractGlassMat = wallMat;
-              wallMat.uniforms.uTint.value.set(0.85, 0.95, 1.0);
-              wallMat.uniforms.uTint2.value.set(0.6, 0.85, 1.0);
-              wallMat.uniforms.uOpacity.value = 0.72;
+            const templeGroup = new THREE.Group();
+            templeGroup.position.set(0, GROUND_SURFACE_Y, -34);
+            scene.add(templeGroup);
 
-              const cell = 4.2;
-              const mw = 13;
-              const mh = 13;
-              const wallH = 5.6;
-              const thickness = 0.5;
-              const originX = -mw * cell * 0.5;
-              const originZ = -mh * cell * 0.5;
-
-              // Maze walls: vWalls between columns (mw+1 by mh), hWalls between rows (mw by mh+1).
-              const vWalls = new Uint8Array((mw + 1) * mh);
-              const hWalls = new Uint8Array(mw * (mh + 1));
-              for (let i = 0; i < vWalls.length; i++) vWalls[i] = 1;
-              for (let i = 0; i < hWalls.length; i++) hWalls[i] = 1;
-              const vis = new Uint8Array(mw * mh);
-              function vI(x, z) {
-                return x + z * (mw + 1);
-              }
-              function hI(x, z) {
-                return x + z * mw;
-              }
-              function cI(x, z) {
-                return x + z * mw;
-              }
-              function carveMaze(sx, sz) {
-                const stack = [[sx, sz]];
-                vis[cI(sx, sz)] = 1;
-                while (stack.length) {
-                  const top = stack[stack.length - 1];
-                  const x = top[0];
-                  const z = top[1];
-                  const dirs = [
-                    [1, 0],
-                    [-1, 0],
-                    [0, 1],
-                    [0, -1]
-                  ];
-                  for (let k = dirs.length - 1; k > 0; k--) {
-                    const j = (Math.random() * (k + 1)) | 0;
-                    const t = dirs[k];
-                    dirs[k] = dirs[j];
-                    dirs[j] = t;
-                  }
-                  let moved = false;
-                  for (let di = 0; di < 4; di++) {
-                    const nx = x + dirs[di][0];
-                    const nz = z + dirs[di][1];
-                    if (nx < 0 || nx >= mw || nz < 0 || nz >= mh) continue;
-                    if (vis[cI(nx, nz)]) continue;
-                    // Knock down the wall between (x,z) and (nx,nz)
-                    if (nx === x + 1) vWalls[vI(x + 1, z)] = 0;
-                    else if (nx === x - 1) vWalls[vI(x, z)] = 0;
-                    else if (nz === z + 1) hWalls[hI(x, z + 1)] = 0;
-                    else if (nz === z - 1) hWalls[hI(x, z)] = 0;
-                    vis[cI(nx, nz)] = 1;
-                    stack.push([nx, nz]);
-                    moved = true;
-                    break;
-                  }
-                  if (!moved) stack.pop();
-                }
-              }
-              carveMaze((Math.random() * mw) | 0, (Math.random() * mh) | 0);
-              // Ensure entrances so it doesn't feel sealed.
-              hWalls[hI(((mw * 0.5) | 0), 0)] = 0;
-              hWalls[hI(((mw * 0.5) | 0), mh)] = 0;
-
-              const wallGeoX = new THREE.BoxGeometry(cell + thickness, wallH, thickness, 1, 1, 1);
-              const wallGeoZ = new THREE.BoxGeometry(thickness, wallH, cell + thickness, 1, 1, 1);
-              const segs = [];
-              // Horizontal walls (along X) at z edges
-              for (let z = 0; z <= mh; z++) {
-                for (let x = 0; x < mw; x++) {
-                  if (!hWalls[hI(x, z)]) continue;
-                  const wx = originX + (x + 0.5) * cell;
-                  const wz = originZ + z * cell;
-                  segs.push({ x: wx, z: wz, kind: "x" });
-                }
-              }
-              // Vertical walls (along Z) at x edges
-              for (let z = 0; z < mh; z++) {
-                for (let x = 0; x <= mw; x++) {
-                  if (!vWalls[vI(x, z)]) continue;
-                  const wx = originX + x * cell;
-                  const wz = originZ + (z + 0.5) * cell;
-                  segs.push({ x: wx, z: wz, kind: "z" });
-                }
-              }
-
-              const xs = segs.filter(function (s) {
-                return s.kind === "x";
-              });
-              const zs = segs.filter(function (s) {
-                return s.kind === "z";
-              });
-              const instX = new THREE.InstancedMesh(wallGeoX, wallMat, Math.max(1, xs.length));
-              const instZ = new THREE.InstancedMesh(wallGeoZ, wallMat, Math.max(1, zs.length));
-              instX.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-              instZ.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-              instX.frustumCulled = false;
-              instZ.frustumCulled = false;
-              const o = new THREE.Object3D();
-              for (let i = 0; i < xs.length; i++) {
-                const s = xs[i];
-                o.position.set(s.x, GROUND_SURFACE_Y + wallH * 0.5, s.z);
-                o.rotation.set(0, 0, 0);
-                // Trippy liquid wobble: subtle per-segment tilt.
-                o.rotation.y = Math.sin(i * 0.23) * 0.06;
-                o.rotation.z = Math.cos(i * 0.19) * 0.05;
-                o.scale.setScalar(1);
-                o.updateMatrix();
-                instX.setMatrixAt(i, o.matrix);
-              }
-              for (let i = 0; i < zs.length; i++) {
-                const s = zs[i];
-                o.position.set(s.x, GROUND_SURFACE_Y + wallH * 0.5, s.z);
-                o.rotation.set(0, 0, 0);
-                o.rotation.y = Math.sin(i * 0.21) * 0.06;
-                o.rotation.x = Math.cos(i * 0.17) * 0.05;
-                o.scale.setScalar(1);
-                o.updateMatrix();
-                instZ.setMatrixAt(i, o.matrix);
-              }
-              instX.instanceMatrix.needsUpdate = true;
-              instZ.instanceMatrix.needsUpdate = true;
-              group.add(instX);
-              group.add(instZ);
-              tesseractFractal = { group };
-            }
-
-            function addRainbowDragon() {
-              const segCount = 220;
-              const headScale = 1.85;
-              const bodyR = 0.26;
-              const geo = new THREE.SphereGeometry(bodyR, 12, 10);
-              // Unlit so it stays vivid regardless of lighting/shadows.
-              const mat = new THREE.MeshBasicMaterial({
-                color: 0xffffff,
-                vertexColors: true,
+            const marble = new THREE.MeshStandardMaterial({
+              color: 0xf7f5f0,
+              roughness: 0.42,
+              metalness: 0.04,
+              envMapIntensity: 0.45
+            });
+            const marbleShadow = new THREE.MeshStandardMaterial({
+              color: 0xe4e1d8,
+              roughness: 0.48,
+              metalness: 0.03,
+              envMapIntensity: 0.38
+            });
+            const gold = new THREE.MeshStandardMaterial({
+              color: 0xe8c56a,
+              roughness: 0.42,
+              metalness: 0.55,
+              envMapIntensity: 0.75
+            });
+            function gemMat(hex, emissiveMul) {
+              const co = new THREE.Color(hex);
+              return new THREE.MeshPhysicalMaterial({
+                color: co,
+                emissive: co.clone().multiplyScalar(emissiveMul),
+                emissiveIntensity: 0.35,
+                metalness: 0.15,
+                roughness: 0.12,
+                clearcoat: 1,
+                clearcoatRoughness: 0.08,
+                envMapIntensity: 1.1,
                 transparent: true,
-                opacity: 0.98,
-                depthWrite: false,
-                blending: THREE.AdditiveBlending
+                opacity: 0.96
               });
-              const inst = new THREE.InstancedMesh(geo, mat, segCount);
-              inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-              inst.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(segCount * 3), 3);
-              inst.frustumCulled = false;
-              inst.renderOrder = 3;
-              scene.add(inst);
+            }
+            const gemRed = gemMat(0xd4283d, 0.25);
+            const gemBlue = gemMat(0x1f6fd0, 0.22);
+            const gemYellow = gemMat(0xf0c82e, 0.28);
 
-              tesseractDragon = {
-                inst,
-                segCount,
-                headScale,
-                bodyR,
-                phase: Math.random() * 1000,
-                center: new THREE.Vector3(0, GROUND_SURFACE_Y + 6.4, 0),
-                baseR: 14.5,
-                yAmp: 2.6,
-                snakeAmp: 1.75,
-                speed: 0.55
-              };
+            function addGem(mesh, x, y, z, sx) {
+              mesh.position.set(x, y, z);
+              mesh.scale.setScalar(sx || 1);
+              templeGroup.add(mesh);
             }
 
-            addMirrorLabyrinthWorld();
-            addRainbowDragon();
+            (function addGreekTemple() {
+              const styW = 38;
+              const styD = 22;
+              const stepH = 0.55;
+              const step0 = new THREE.Mesh(new THREE.BoxGeometry(styW + 4, stepH, styD + 3.2), marbleShadow);
+              step0.position.set(0, stepH * 0.5, 0);
+              templeGroup.add(step0);
+              const step1 = new THREE.Mesh(new THREE.BoxGeometry(styW + 2.2, stepH, styD + 1.8), marble);
+              step1.position.set(0, stepH * 1.5, 0);
+              templeGroup.add(step1);
+              const styY = stepH * 2 + 0.35;
+              const stylobate = new THREE.Mesh(new THREE.BoxGeometry(styW, 0.7, styD), marble);
+              stylobate.position.set(0, styY, 0);
+              templeGroup.add(stylobate);
+              groundPickables.push(stylobate);
+              shadowPickables.push(stylobate);
+
+              const cellaW = 13;
+              const cellaD = 10;
+              const cellaH = 7.2;
+              const cellaZ = -1.2;
+              const cella = new THREE.Mesh(new THREE.BoxGeometry(cellaW, cellaH, cellaD), marble);
+              cella.position.set(0, styY + 0.35 + cellaH * 0.5, cellaZ);
+              templeGroup.add(cella);
+              groundPickables.push(cella);
+              shadowPickables.push(cella);
+
+              const door = new THREE.Mesh(new THREE.BoxGeometry(4.2, 5.4, 0.55), gold);
+              door.position.set(0, styY + 0.35 + 2.9, cellaZ + cellaD * 0.5 + 0.28);
+              templeGroup.add(door);
+
+              const architraveH = 0.85;
+              const architrave = new THREE.Mesh(new THREE.BoxGeometry(styW - 0.4, architraveH, styD - 0.2), marbleShadow);
+              architrave.position.set(0, styY + 0.35 + cellaH + architraveH * 0.5, 0.2);
+              templeGroup.add(architrave);
+
+              const friezeH = 0.95;
+              const frieze = new THREE.Mesh(new THREE.BoxGeometry(styW - 0.6, friezeH, styD - 0.35), marble);
+              frieze.position.set(0, styY + 0.35 + cellaH + architraveH + friezeH * 0.5, 0.2);
+              templeGroup.add(frieze);
+
+              const friezeY = styY + 0.35 + cellaH + architraveH + friezeH;
+              const gemGeo = new THREE.OctahedronGeometry(0.38, 0);
+              const friezeGems = [
+                [-12, gemRed],
+                [-7.5, gemBlue],
+                [-3, gemYellow],
+                [2, gemRed],
+                [6.5, gemBlue],
+                [11, gemYellow]
+              ];
+              for (let gi = 0; gi < friezeGems.length; gi++) {
+                const g = new THREE.Mesh(gemGeo, friezeGems[gi][1]);
+                addGem(g, friezeGems[gi][0], friezeY + 0.35, styD * 0.5 - 0.55, 1);
+              }
+
+              const pedW = styW - 1;
+              const pedH = 4.2;
+              const pedShape = new THREE.Shape();
+              pedShape.moveTo(-pedW * 0.5, 0);
+              pedShape.lineTo(pedW * 0.5, 0);
+              pedShape.lineTo(0, pedH);
+              pedShape.lineTo(-pedW * 0.5, 0);
+              const pedGeom = new THREE.ExtrudeGeometry(pedShape, { depth: 1.1, bevelEnabled: false });
+              pedGeom.center();
+              const ped = new THREE.Mesh(pedGeom, marbleShadow);
+              ped.position.set(0, friezeY + friezeH * 0.5 + pedH * 0.38, styD * 0.5 - 0.32);
+              templeGroup.add(ped);
+
+              const acroY = friezeY + friezeH * 0.5 + pedH * 0.88;
+              addGem(new THREE.Mesh(new THREE.OctahedronGeometry(0.38, 0), gemRed), -pedW * 0.42, acroY, styD * 0.5 + 0.42, 1.15);
+              addGem(new THREE.Mesh(new THREE.OctahedronGeometry(0.38, 0), gemBlue), pedW * 0.42, acroY, styD * 0.5 + 0.42, 1.15);
+              addGem(new THREE.Mesh(new THREE.OctahedronGeometry(0.38, 0), gemYellow), 0, acroY + 0.55, styD * 0.5 + 0.52, 1.35);
+
+              const colH = cellaH + architraveH * 0.5;
+              const colR = 0.72;
+              const colGeo = new THREE.CylinderGeometry(colR * 0.88, colR, colH, 16, 1);
+              const baseGeo = new THREE.CylinderGeometry(colR * 1.15, colR * 1.28, 0.45, 16, 1);
+              const capGeo = new THREE.CylinderGeometry(colR * 1.12, colR * 0.92, 0.55, 16, 1);
+              const zFront = styD * 0.5 - colR * 1.2;
+              const zBack = -styD * 0.5 + colR * 1.2;
+              const xSpan = styW * 0.5 - colR * 2;
+              const nFront = 7;
+              for (let i = 0; i < nFront; i++) {
+                const t = nFront === 1 ? 0 : i / (nFront - 1);
+                const x = (t - 0.5) * 2 * xSpan;
+                const z = zFront;
+                const cy = styY + 0.35 + colH * 0.5;
+                const base = new THREE.Mesh(baseGeo, marbleShadow);
+                base.position.set(x, styY + 0.225, z);
+                templeGroup.add(base);
+                const col = new THREE.Mesh(colGeo, marble);
+                col.position.set(x, cy, z);
+                templeGroup.add(col);
+                const cap = new THREE.Mesh(capGeo, marble);
+                cap.position.set(x, styY + 0.35 + colH + 0.275, z);
+                templeGroup.add(cap);
+                const acc = [gemRed, gemBlue, gemYellow][i % 3];
+                addGem(new THREE.Mesh(new THREE.OctahedronGeometry(0.22, 0), acc), x, styY + 0.35 + colH + 0.62, z, 1);
+              }
+              for (let i = 0; i < nFront; i++) {
+                const t = nFront === 1 ? 0 : i / (nFront - 1);
+                const x = (t - 0.5) * 2 * xSpan;
+                const z = zBack;
+                const cy = styY + 0.35 + colH * 0.5;
+                const base = new THREE.Mesh(baseGeo, marbleShadow);
+                base.position.set(x, styY + 0.225, z);
+                templeGroup.add(base);
+                const col = new THREE.Mesh(colGeo, marble);
+                col.position.set(x, cy, z);
+                templeGroup.add(col);
+                const cap = new THREE.Mesh(capGeo, marble);
+                cap.position.set(x, styY + 0.35 + colH + 0.275, z);
+                templeGroup.add(cap);
+              }
+              const nSide = 3;
+              const xL = -styW * 0.5 + colR * 1.2;
+              const xR = styW * 0.5 - colR * 1.2;
+              const zSpan = styD - colR * 4;
+              for (let s = 0; s < nSide; s++) {
+                const tt = nSide === 1 ? 0.5 : s / (nSide - 1);
+                const z = (tt - 0.5) * zSpan;
+                for (const x of [xL, xR]) {
+                  const cy = styY + 0.35 + colH * 0.5;
+                  const base = new THREE.Mesh(baseGeo, marbleShadow);
+                  base.position.set(x, styY + 0.225, z);
+                  templeGroup.add(base);
+                  const col = new THREE.Mesh(colGeo, marble);
+                  col.position.set(x, cy, z);
+                  templeGroup.add(col);
+                  const cap = new THREE.Mesh(capGeo, marble);
+                  cap.position.set(x, styY + 0.35 + colH + 0.275, z);
+                  templeGroup.add(cap);
+                }
+              }
+            })();
+
+            (function addCourtyardAccents() {
+              const plinth = new THREE.BoxGeometry(1.1, 0.55, 1.1);
+              const spots = [
+                [pondCx - pondW * 0.42, pondCz + pondD * 0.38, gemRed],
+                [pondCx + pondW * 0.42, pondCz + pondD * 0.36, gemBlue],
+                [pondCx - pondW * 0.4, pondCz - pondD * 0.38, gemYellow],
+                [pondCx + pondW * 0.4, pondCz - pondD * 0.38, gemRed]
+              ];
+              for (let i = 0; i < spots.length; i++) {
+                const sx = spots[i][0];
+                const sz = spots[i][1];
+                const smat = spots[i][2];
+                const p = new THREE.Mesh(plinth, marbleShadow);
+                p.position.set(sx, GROUND_SURFACE_Y + 0.275, sz);
+                scene.add(p);
+                groundPickables.push(p);
+                shadowPickables.push(p);
+                const g = new THREE.Mesh(new THREE.OctahedronGeometry(0.45, 0), smat);
+                g.position.set(sx, GROUND_SURFACE_Y + 0.85, sz);
+                scene.add(g);
+              }
+            })();
+
+            for (let si = 0; si < 36; si++) {
+              const x = (Math.random() * 2 - 1) * 68;
+              const z = (Math.random() * 2 - 1) * 68;
+              if (inPond2(x, z)) continue;
+              if (Math.abs(x) < 22 && z > -48 && z < 4) continue;
+              landSpawnList.push({ x: x, z: z, b: 1, ix: 0, iz: 0 });
+            }
           })();
         }
 
@@ -3495,7 +3532,8 @@
           }
         }
         player.position.set(tileWorldSpawn.x, playerSpawnY, tileWorldSpawn.z);
-        player.rotation.y = Math.PI / 4;
+        // Match initial orbit camera (sin/cos yaw) so the character faces the opening camera.
+        player.rotation.y = currentCameraAngle;
         const cameraAnchor = new THREE.Vector3();
         cameraAnchor.copy(player.position);
         let noGroundTime = 0;
@@ -8205,61 +8243,7 @@
           flareTime += dt;
           cloudMat.uniforms.uTime.value += dt;
           if (oceanWaterMat) oceanWaterMat.uniforms.uTime.value += dt;
-          if (tesseractGlassMat && tesseractGlassMat.uniforms && tesseractGlassMat.uniforms.uTime) {
-            tesseractGlassMat.uniforms.uTime.value += dt;
-          }
-          if (tesseractFractal && tesseractFractal.group) {
-            const g = tesseractFractal.group;
-            g.rotation.y += dt * 0.18;
-            g.rotation.x = 0.22 + Math.sin(flareTime * 0.25) * 0.08;
-            g.rotation.z = Math.cos(flareTime * 0.22) * 0.06;
-          }
-          if (tesseractDragon && tesseractDragon.inst) {
-            const D = tesseractDragon;
-            D.phase += dt;
-            const t = D.phase * D.speed;
-            const o = tesseractDragonTmp.obj;
-            const c = tesseractDragonTmp.col;
-            const up = new THREE.Vector3(0, 1, 0);
-            let prevX = 0;
-            let prevY = 0;
-            let prevZ = 0;
-            let hasPrev = false;
-            for (let i = 0; i < D.segCount; i++) {
-              const u = i / Math.max(1, D.segCount - 1);
-              // Head leads; tail lags.
-              const tt = t - u * 5.2;
-              const ang = tt * 0.85 + Math.sin(tt * 0.33) * 0.35;
-              const rr = D.baseR + Math.sin(tt * 1.3) * 1.4;
-              const wob = Math.sin(tt * 2.1 + u * 6.0) * D.snakeAmp;
-              const x = D.center.x + Math.cos(ang) * rr + Math.cos(ang + Math.PI / 2) * wob;
-              const z = D.center.z + Math.sin(ang) * rr + Math.sin(ang + Math.PI / 2) * wob;
-              const y = D.center.y + Math.sin(tt * 1.7 + u * 9.0) * D.yAmp + Math.cos(tt * 0.55) * 0.35;
-              o.position.set(x, y, z);
-
-              // Orient each segment to face the previous one (so it reads as a coherent snake).
-              if (hasPrev) {
-                o.lookAt(prevX, prevY, prevZ);
-                o.rotateOnAxis(up, Math.PI);
-              } else {
-                o.rotation.set(0, ang + Math.PI / 2, 0);
-              }
-              const s = (1.0 - u) * 0.65 + 0.55;
-              const headBoost = i < 6 ? 1.0 + (6 - i) * 0.15 : 1.0;
-              o.scale.setScalar(s * headBoost * (i === 0 ? D.headScale : 1.0));
-              o.updateMatrix();
-              D.inst.setMatrixAt(i, o.matrix);
-              // Rainbow: hue flows along body + time.
-              c.setHSL((t * 0.12 + u * 1.1) % 1, 1.0, 0.62);
-              D.inst.setColorAt(i, c);
-              prevX = x;
-              prevY = y;
-              prevZ = z;
-              hasPrev = true;
-            }
-            D.inst.instanceMatrix.needsUpdate = true;
-            if (D.inst.instanceColor) D.inst.instanceColor.needsUpdate = true;
-          }
+          // (Former tesseract animations removed) Greek temple courtyard world is static.
           // Keep sky dome centered on camera.
           cloudDome.position.copy(camera.position);
           stars.position.copy(camera.position);
