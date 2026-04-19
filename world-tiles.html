@@ -602,7 +602,7 @@
       function initGame() {
         const LS_MAP_MODE = "worldTilesMapMode";
         /** HUD cycle order; extend alongside readMapMode() and world init when adding maps. */
-        const MAP_MODE_IDS = ["island", "board", "tesseract", "mesa", "aurora", "reef"];
+        const MAP_MODE_IDS = ["island", "board", "tesseract", "mesa", "aurora", "reef", "primordium"];
         function readMapMode() {
           try {
             const q = new URLSearchParams(String(location.search || ""));
@@ -622,7 +622,9 @@
         const useMesaMap = mapMode === "mesa";
         const useAuroraMap = mapMode === "aurora";
         const useReefMap = mapMode === "reef";
-        const useArenaMap = useBoardMap || useMesaMap || useAuroraMap || useReefMap;
+        const usePrimordiumMap = mapMode === "primordium";
+        const useArenaMap =
+          useBoardMap || useMesaMap || useAuroraMap || useReefMap || usePrimordiumMap;
         try {
           const q = new URLSearchParams(String(location.search || ""));
           const u = q.get("map");
@@ -2890,6 +2892,129 @@
             try {
               renderer.domElement.style.background = "#" + skyR.getHexString();
             } catch (eSkyR) {}
+          })();
+        } else if (usePrimordiumMap) {
+          (function buildPrimordiumWorld() {
+            // Spore-adjacent ooze sea: undulating slime floor, drifting cells, central "metabolic core" (click = DNA arp).
+            const half = 52;
+            mapBoardHalfExtent = half;
+            function slimeHeight(x, z) {
+              return (
+                Math.sin(x * 0.09) * 0.22 +
+                Math.sin(z * 0.11) * 0.2 +
+                Math.sin((x + z) * 0.07) * 0.35 +
+                Math.sin((x * 2 - z) * 0.05) * 0.12
+              );
+            }
+            const plane = new THREE.PlaneGeometry(half * 2, half * 2, 56, 56);
+            plane.rotateX(-Math.PI / 2);
+            const pos = plane.attributes.position;
+            const cols = new Float32Array(pos.count * 3);
+            const c1 = new THREE.Color(0x5c2a72);
+            const c2 = new THREE.Color(0x1e8877);
+            const c3 = new THREE.Color(0xc94b9c);
+            const mix = new THREE.Color();
+            for (let i = 0; i < pos.count; i++) {
+              const x = pos.getX(i);
+              const z = pos.getZ(i);
+              const h = slimeHeight(x, z);
+              pos.setY(i, h);
+              const w = (Math.sin(x * 0.04) * 0.5 + 0.5) * 0.45 + (Math.sin(z * 0.035) * 0.5 + 0.5) * 0.55;
+              mix.copy(c1).lerp(c2, w * 0.55).lerp(c3, (1 - w) * 0.28);
+              cols[i * 3] = mix.r;
+              cols[i * 3 + 1] = mix.g;
+              cols[i * 3 + 2] = mix.b;
+            }
+            pos.needsUpdate = true;
+            plane.computeVertexNormals();
+            plane.setAttribute("color", new THREE.BufferAttribute(cols, 3));
+            const slimeMat = new THREE.MeshStandardMaterial({
+              vertexColors: true,
+              roughness: 0.62,
+              metalness: 0.12,
+              envMapIntensity: 0.55,
+              flatShading: true
+            });
+            const terrain = new THREE.Mesh(plane, slimeMat);
+            terrain.position.y = GROUND_SURFACE_Y;
+            terrain.userData.tileKey = "primordium_slime";
+            terrain.userData.solid = true;
+            scene.add(terrain);
+            groundPickables.push(terrain);
+            shadowPickables.push(terrain);
+            const cytoMat = new THREE.MeshStandardMaterial({
+              color: 0xd889cc,
+              roughness: 0.38,
+              metalness: 0.08,
+              envMapIntensity: 0.62
+            });
+            for (let bi = 0; bi < 28; bi++) {
+              const x = (Math.random() * 2 - 1) * (half - 3);
+              const z = (Math.random() * 2 - 1) * (half - 3);
+              const r = 0.32 + Math.random() * 0.62;
+              const bub = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), cytoMat);
+              const gy = GROUND_SURFACE_Y + slimeHeight(x, z);
+              bub.position.set(x, gy + r * 0.55 + Math.random() * 0.4, z);
+              scene.add(bub);
+            }
+            const stem = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.35, 0.55, 2.2, 10, 1),
+              new THREE.MeshStandardMaterial({ color: 0x7a3d9e, roughness: 0.75, metalness: 0.04 })
+            );
+            stem.position.set(0, GROUND_SURFACE_Y + 1.1, 0);
+            scene.add(stem);
+            groundPickables.push(stem);
+            shadowPickables.push(stem);
+            const coreMat = new THREE.MeshStandardMaterial({
+              color: 0xeeffdd,
+              emissive: 0x44ffcc,
+              emissiveIntensity: 0.42,
+              roughness: 0.32,
+              metalness: 0.15,
+              envMapIntensity: 0.9
+            });
+            const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1.35, 1), coreMat);
+            core.position.set(0, GROUND_SURFACE_Y + 3.2, 0);
+            core.userData.primordialMetabolizer = true;
+            core.userData.primordialStep = 0;
+            core.userData.primordialCoreMat = coreMat;
+            scene.add(core);
+            groundPickables.push(core);
+            shadowPickables.push(core);
+            const ringMat = new THREE.MeshStandardMaterial({
+              color: 0xff66aa,
+              roughness: 0.45,
+              transparent: true,
+              opacity: 0.32,
+              depthWrite: false,
+              side: THREE.DoubleSide
+            });
+            for (let ri = 0; ri < 6; ri++) {
+              const tor = new THREE.Mesh(
+                new THREE.TorusGeometry(2.05 + ri * 0.42, 0.055, 6, 40 + ri * 6),
+                ringMat
+              );
+              tor.rotation.x = Math.PI / 2 + ri * 0.17;
+              tor.rotation.z = ri * 0.41;
+              tor.position.set(0, GROUND_SURFACE_Y + 2.82 + ri * 0.07, 0);
+              scene.add(tor);
+            }
+            for (let si = 0; si < 360; si++) {
+              landSpawnList.push({
+                x: (Math.random() * 2 - 1) * 44,
+                z: (Math.random() * 2 - 1) * 44,
+                b: 1,
+                ix: 0,
+                iz: 0
+              });
+            }
+            tileWorldSpawn = { x: 14, z: 10 };
+            const skyP = new THREE.Color(0x24082f);
+            scene.background = skyP;
+            renderer.setClearColor(skyP, 1);
+            try {
+              renderer.domElement.style.background = "#" + skyP.getHexString();
+            } catch (eSkyP) {}
           })();
         } else if (useTesseractMap) {
           (function buildTesseractWorld() {
@@ -5236,6 +5361,53 @@
           Digit0: 1318.5
         };
         const FM_BELL_SCALE_CODES = Object.keys(FM_BELL_HZ);
+        let primordialNexusSeq = 0;
+        /** `primordium` map: raycast hit on the metabolic core plays an evolving FM-bell arpeggio. */
+        function tryHitPrimordialMetabolizer(groundHit) {
+          if (!usePrimordiumMap || !groundHit || !groundHit.object) return false;
+          let o = groundHit.object;
+          while (o) {
+            const u = o.userData;
+            if (u && u.primordialMetabolizer) {
+              try {
+                FmBellSynth.unlock();
+              } catch (eU) {}
+              const step = (u.primordialStep = ((u.primordialStep | 0) + 1) % 8);
+              const codes = [
+                "Digit1",
+                "Digit3",
+                "Digit5",
+                "Digit6",
+                "Digit8",
+                "Digit6",
+                "Digit4",
+                "Digit2"
+              ];
+              const code = codes[step % codes.length];
+              const hz = FM_BELL_HZ[code];
+              const id = "npcBell_prim_" + primordialNexusSeq++;
+              FmBellSynth.noteOn(id, hz);
+              setTimeout(function () {
+                FmBellSynth.noteOff(id);
+              }, 480 + (step & 1) * 140);
+              const mat = u.primordialCoreMat;
+              if (mat && mat.emissive) {
+                mat.emissive.setHex(0xffffff);
+                mat.emissiveIntensity = 0.95;
+                setTimeout(function () {
+                  if (mat && mat.emissive) {
+                    mat.emissive.setHex(0x44ffcc);
+                    mat.emissiveIntensity = 0.42;
+                  }
+                }, 100);
+              }
+              return true;
+            }
+            if (o.type === "Scene") break;
+            o = o.parent;
+          }
+          return false;
+        }
         const FM_BASS_HZ = {
           Digit1: 523.26 / 8,
           Digit2: 587.32 / 8,
@@ -7961,6 +8133,7 @@
         addEventListener("pointerdown", (e) => {
           if (e.pointerType === "touch") return;
           const groundHit = raycastGround(e.clientX, e.clientY);
+          if (tryHitPrimordialMetabolizer(groundHit)) return;
           if (groundHit) {
             clickTarget.copy(groundHit.point);
             hasClickTarget = true;
@@ -8203,6 +8376,10 @@
               dx * dx + dy * dy <= TAP_MAX_PX * TAP_MAX_PX
             ) {
               const groundHit = raycastGround(t.clientX, t.clientY);
+              if (tryHitPrimordialMetabolizer(groundHit)) {
+                mobileTapCandidate = null;
+                return;
+              }
               if (groundHit) {
                 clickTarget.copy(groundHit.point);
                 hasClickTarget = true;
