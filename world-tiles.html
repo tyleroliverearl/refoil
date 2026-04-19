@@ -5254,6 +5254,8 @@
         let nocturneEnsemblePhrase = 0;
         /** First chord-stab phrase nudges tape-delay wet so stabs use the effect without fighting the slider forever. */
         let noctStabDelayPrimed = false;
+        /** Built once per page load when visiting nocturne (random key + progression + melody shape). */
+        let nocturneSessionChordCycle = null;
         const NPC_SCALE = 0.7;
         const NPC_TRIGGER_DIST = CHARACTER_FACE_H * 1.2; // slightly larger pickup radius
         const NPC_FOLLOW_DIST = CHARACTER_FACE_H * 0.5; // "half-character distance"
@@ -6238,7 +6240,7 @@
               playerMaster = ctx.createGain();
               playerMaster.gain.value = 0.104;
               npcMaster = ctx.createGain();
-              npcMaster.gain.value = 0.112;
+              npcMaster.gain.value = 0.115;
 
               // Shorter IR than before: long convolvers are very expensive when many voices hit the wet bus.
               const irLen = Math.floor(ctx.sampleRate * 0.62);
@@ -6291,7 +6293,7 @@
               tapeFxOut.gain.value = 1;
               playerMaster.connect(tapeDelayIn);
               noctStabSend = ctx.createGain();
-              noctStabSend.gain.value = 0.26;
+              noctStabSend.gain.value = 0.17;
               noctStabSend.connect(tapeDelayIn);
               tapeDelayIn.connect(tapeDry);
               tapeDry.connect(tapeFxOut);
@@ -6559,6 +6561,12 @@
             updateRecordingAudioRoute();
           }
 
+          /** Quartet / ensemble: scales `triggerDrumImpl` output (nocturne sets ~0.74). */
+          let drumEnsembleScale = 1;
+          function setDrumEnsembleScale(s) {
+            drumEnsembleScale = Math.max(0.35, Math.min(1.35, s));
+          }
+
           let drumNoiseBuffer = null;
           function getDrumNoiseBuffer() {
             if (!ctx) return null;
@@ -6602,7 +6610,7 @@
 
             const DRUM_LOUD = 1.42;
             function dg(v) {
-              return Math.min(1.18, v * DRUM_LOUD);
+              return Math.min(1.18, v * DRUM_LOUD * drumEnsembleScale);
             }
 
             if (kind === "kick") {
@@ -6828,91 +6836,105 @@
               ampGain.connect(npcDry);
               ampGain.connect(npcConv);
             } else if (isNoctLead) {
-              const MOD_RATIO = 2.14;
-              carrier.type = "triangle";
+              // Rhodes / EP-inspired: sine tine FM, soft index, dry forward mix (neo-soul keyboard reference).
+              const MOD_RATIO = 2.01;
+              carrier.type = "sine";
               mod.type = "sine";
               carrier.frequency.setValueAtTime(fc, t);
               mod.frequency.setValueAtTime(fc * MOD_RATIO, t);
-              carrier.detune.setValueAtTime((Math.random() - 0.5) * 11, t);
-              mod.detune.setValueAtTime((Math.random() - 0.5) * 8, t);
-              const indexPeak = Math.min(56, Math.max(12, fc * 0.064));
-              const indexSus = Math.min(23, Math.max(4.2, fc * 0.029));
+              carrier.detune.setValueAtTime((Math.random() - 0.5) * 9, t);
+              mod.detune.setValueAtTime((Math.random() - 0.5) * 6, t);
+              const indexPeak = Math.min(34, Math.max(9, fc * 0.036));
+              const indexSus = Math.min(14, Math.max(3.8, fc * 0.016));
               modGain.gain.setValueAtTime(0.0001, t);
-              modGain.gain.exponentialRampToValueAtTime(indexPeak, t + 0.0065);
-              modGain.gain.exponentialRampToValueAtTime(indexSus, t + 0.12);
-              modGain.gain.exponentialRampToValueAtTime(0.035, t + 0.48);
+              modGain.gain.exponentialRampToValueAtTime(indexPeak, t + 0.0075);
+              modGain.gain.exponentialRampToValueAtTime(indexSus, t + 0.11);
+              modGain.gain.exponentialRampToValueAtTime(0.045, t + 0.52);
               mod.connect(modGain);
               modGain.connect(carrier.frequency);
               ampGain.gain.setValueAtTime(0.0001, t);
-              ampGain.gain.exponentialRampToValueAtTime(0.41, t + 0.0042);
-              ampGain.gain.exponentialRampToValueAtTime(0.22, t + 0.08);
-              ampGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.78);
+              ampGain.gain.exponentialRampToValueAtTime(0.44, t + 0.0038);
+              ampGain.gain.exponentialRampToValueAtTime(0.2, t + 0.095);
+              ampGain.gain.exponentialRampToValueAtTime(0.0001, t + 1.05);
               resPeak = audio.createBiquadFilter();
               resPeak.type = "peaking";
-              const pkF = Math.min(4800, Math.max(1500, fc * 3.35 + 680));
+              const pkF = Math.min(3800, Math.max(1180, fc * 2.85 + 520));
               resPeak.frequency.setValueAtTime(pkF, t);
-              resPeak.Q.setValueAtTime(1.42, t);
+              resPeak.Q.setValueAtTime(1.05, t);
               resPeak.gain.setValueAtTime(0, t);
-              resPeak.gain.linearRampToValueAtTime(4.8, t + 0.0055);
-              resPeak.gain.linearRampToValueAtTime(2.6, t + 0.048);
-              resPeak.gain.linearRampToValueAtTime(0.55, t + 0.2);
+              resPeak.gain.linearRampToValueAtTime(3.4, t + 0.008);
+              resPeak.gain.linearRampToValueAtTime(1.9, t + 0.06);
+              resPeak.gain.linearRampToValueAtTime(0.35, t + 0.22);
               carrier.connect(ampGain);
               ampGain.connect(resPeak);
               resPeak.connect(npcDry);
-              resPeak.connect(npcConv);
             } else if (isNoctBass) {
-              // Pocket bass on NPC bus (same path as glass lead) — sub + mild FM triangle, audible under drums.
-              const MOD_RATIO = 1.0;
-              carrier.type = "triangle";
+              // Electric-bass inspired: saw body + light FM + mild low-mid resonance, sub anchor.
+              const MOD_RATIO = 0.5;
+              carrier.type = "sawtooth";
               mod.type = "sine";
               carrier.frequency.setValueAtTime(fc, t);
               mod.frequency.setValueAtTime(fc * MOD_RATIO, t);
-              carrier.detune.setValueAtTime((Math.random() - 0.5) * 8, t);
-              mod.detune.setValueAtTime((Math.random() - 0.5) * 6, t);
-              const indexPeak = Math.min(46, Math.max(11, fc * 0.1));
-              const indexSus = Math.min(19, Math.max(5, fc * 0.038));
+              carrier.detune.setValueAtTime((Math.random() - 0.5) * 7, t);
+              mod.detune.setValueAtTime((Math.random() - 0.5) * 5, t);
+              const indexPeak = Math.min(28, Math.max(6, fc * 0.055));
+              const indexSus = Math.min(12, Math.max(3.2, fc * 0.022));
               modGain.gain.setValueAtTime(0.0001, t);
-              modGain.gain.exponentialRampToValueAtTime(indexPeak, t + 0.01);
-              modGain.gain.exponentialRampToValueAtTime(indexSus, t + 0.088);
+              modGain.gain.exponentialRampToValueAtTime(indexPeak, t + 0.009);
+              modGain.gain.exponentialRampToValueAtTime(indexSus, t + 0.08);
               mod.connect(modGain);
               modGain.connect(carrier.frequency);
               ampGain.gain.setValueAtTime(0.0001, t);
-              ampGain.gain.exponentialRampToValueAtTime(0.52, t + 0.0035);
-              ampGain.gain.exponentialRampToValueAtTime(0.38, t + 0.055);
-              ampGain.gain.exponentialRampToValueAtTime(0.26, t + 0.34);
+              ampGain.gain.exponentialRampToValueAtTime(0.44, t + 0.0032);
+              ampGain.gain.exponentialRampToValueAtTime(0.3, t + 0.05);
+              ampGain.gain.exponentialRampToValueAtTime(0.2, t + 0.32);
               sub = audio.createOscillator();
               sub.type = "sine";
               sub.frequency.setValueAtTime(Math.max(32, fc * 0.5), t);
               subGain = audio.createGain();
               subGain.gain.setValueAtTime(0.0001, t);
-              subGain.gain.exponentialRampToValueAtTime(0.42, t + 0.006);
-              subGain.gain.exponentialRampToValueAtTime(0.28, t + 0.09);
+              subGain.gain.exponentialRampToValueAtTime(0.38, t + 0.006);
+              subGain.gain.exponentialRampToValueAtTime(0.24, t + 0.09);
+              resPeak = audio.createBiquadFilter();
+              resPeak.type = "peaking";
+              resPeak.frequency.setValueAtTime(198, t);
+              resPeak.Q.setValueAtTime(1.22, t);
+              resPeak.gain.setValueAtTime(0, t);
+              resPeak.gain.linearRampToValueAtTime(3.1, t + 0.008);
+              resPeak.gain.linearRampToValueAtTime(1.6, t + 0.055);
+              resPeak.gain.linearRampToValueAtTime(0, t + 0.26);
               filt = audio.createBiquadFilter();
               filt.type = "lowpass";
-              filt.Q.setValueAtTime(1.02, t);
-              filt.frequency.setValueAtTime(2550, t);
-              filt.frequency.exponentialRampToValueAtTime(400, t + 0.14);
+              filt.Q.setValueAtTime(1.08, t);
+              filt.frequency.setValueAtTime(2680, t);
+              filt.frequency.exponentialRampToValueAtTime(420, t + 0.15);
               carrier.connect(ampGain);
-              ampGain.connect(filt);
+              ampGain.connect(resPeak);
+              resPeak.connect(filt);
               filt.connect(npcDry);
               sub.connect(subGain);
               subGain.connect(npcDry);
             } else if (isNoctStab) {
               const send = noctStabSend;
-              carrier.type = "triangle";
+              carrier.type = "sine";
               carrier.frequency.setValueAtTime(fc, t);
-              carrier.detune.setValueAtTime((Math.random() - 0.5) * 10, t);
+              carrier.detune.setValueAtTime((Math.random() - 0.5) * 6, t);
               modGain.gain.setValueAtTime(0, t);
               mod.frequency.setValueAtTime(fc, t);
               mod.connect(modGain);
+              filt = audio.createBiquadFilter();
+              filt.type = "lowpass";
+              filt.frequency.setValueAtTime(5200, t);
+              filt.Q.setValueAtTime(0.71, t);
               ampGain.gain.setValueAtTime(0.0001, t);
-              ampGain.gain.exponentialRampToValueAtTime(0.14, t + 0.0022);
-              ampGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+              ampGain.gain.linearRampToValueAtTime(0.078, t + 0.038);
+              ampGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
               carrier.connect(ampGain);
-              if (send) ampGain.connect(send);
+              ampGain.connect(filt);
+              if (send) filt.connect(send);
               else {
-                ampGain.connect(npcDry);
-                ampGain.connect(npcConv);
+                filt.connect(npcDry);
+                filt.connect(npcConv);
               }
             } else {
               const P = playerInst;
@@ -7031,9 +7053,9 @@
             if (sub) {
               vrec.sub = sub;
               vrec.subGain = subGain;
-              vrec.filt = filt;
               if (lowWarm) vrec.lowWarm = lowWarm;
             }
+            if (filt) vrec.filt = filt;
             if (resPeak) vrec.resPeak = resPeak;
             voices.set(voiceId, vrec);
             if (pendingReleaseVoiceIds.has(voiceId)) {
@@ -7198,7 +7220,8 @@
             toggleOverdub,
             randomizePlayerInstrument,
             setTapeDelayNorm,
-            getTapeDelayNorm
+            getTapeDelayNorm,
+            setDrumEnsembleScale
           };
         })();
 
@@ -7363,119 +7386,72 @@
         ];
 
         /**
-         * Shared harmony for the nocturne trio: **Am – F – C – G** (vi–IV–I–V in C), one chord per ~6.25s phrase.
-         * Bass spells roots / arpeggios; glass lead uses chord tones on fixed rhythmic slots so changes line up.
+         * Randomized each visit: diatonic **4-chord loops** (neo-soul–style I–vi–IV–V / circle variants, common-tone motion),
+         * random **key**, walking **bass**, new **lead** rhythm + pitch contour, triad **stabs** per chord.
          */
-        const NOCTURN_CHORD_CYCLE = [
-          {
-            bass: [
-              "Digit6",
-              "Digit3",
-              "Digit1",
-              "Digit3",
-              "Digit6",
-              "Digit1",
-              "Digit3",
-              "Digit6",
-              "Digit3",
-              "Digit1",
-              "Digit6",
-              "Digit3"
-            ],
-            lead: [
-              { c: "Digit6", t: 140 },
-              { c: "Digit8", t: 580 },
-              { c: "Digit3", t: 1020 },
-              { c: "Digit8", t: 1560 },
-              { c: "Digit3", t: 2180 },
-              { c: "Digit6", t: 2760 },
-              { c: "Digit3", t: 3420 },
-              { c: "Digit8", t: 4140 }
-            ],
-            stabCodes: ["Digit6", "Digit8", "Digit3"]
-          },
-          {
-            bass: [
-              "Digit4",
-              "Digit1",
-              "Digit6",
-              "Digit1",
-              "Digit4",
-              "Digit6",
-              "Digit1",
-              "Digit4",
-              "Digit1",
-              "Digit6",
-              "Digit4",
-              "Digit6"
-            ],
-            lead: [
-              { c: "Digit4", t: 130 },
-              { c: "Digit6", t: 560 },
-              { c: "Digit8", t: 1000 },
-              { c: "Digit1", t: 1620 },
-              { c: "Digit4", t: 2240 },
-              { c: "Digit8", t: 2820 },
-              { c: "Digit6", t: 3520 },
-              { c: "Digit1", t: 4200 }
-            ],
-            stabCodes: ["Digit4", "Digit6", "Digit1"]
-          },
-          {
-            bass: [
-              "Digit1",
-              "Digit5",
-              "Digit3",
-              "Digit5",
-              "Digit1",
-              "Digit3",
-              "Digit5",
-              "Digit1",
-              "Digit5",
-              "Digit3",
-              "Digit1",
-              "Digit5"
-            ],
-            lead: [
-              { c: "Digit5", t: 120 },
-              { c: "Digit8", t: 600 },
-              { c: "Digit3", t: 1040 },
-              { c: "Digit5", t: 1640 },
-              { c: "Digit1", t: 2280 },
-              { c: "Digit5", t: 2900 },
-              { c: "Digit8", t: 3580 },
-              { c: "Digit3", t: 4260 }
-            ],
-            stabCodes: ["Digit1", "Digit3", "Digit5"]
-          },
-          {
-            bass: [
-              "Digit5",
-              "Digit2",
-              "Digit7",
-              "Digit2",
-              "Digit5",
-              "Digit7",
-              "Digit2",
-              "Digit5",
-              "Digit2",
-              "Digit7",
-              "Digit5",
-              "Digit2"
-            ],
-            lead: [
-              { c: "Digit5", t: 125 },
-              { c: "Digit7", t: 550 },
-              { c: "Digit2", t: 980 },
-              { c: "Digit5", t: 1580 },
-              { c: "Digit8", t: 2200 },
-              { c: "Digit7", t: 2860 },
-              { c: "Digit2", t: 3480 },
-              { c: "Digit5", t: 4180 }
-            ],
-            stabCodes: ["Digit5", "Digit7", "Digit2"]
+        function initNocturneSessionHarmonyOnce() {
+          if (nocturneSessionChordCycle) return;
+          try {
+            FmBellSynth.setDrumEnsembleScale(0.72);
+          } catch (eS) {}
+          const scal = ["Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7"];
+          const altHi = ["Digit5", "Digit6", "Digit7", "Digit8", "Digit9"];
+          function at(deg, k) {
+            return scal[(((deg | 0) % 7) + 7 + ((k | 0) % 7)) % 7];
           }
-        ];
+          function triad(R, k) {
+            return [at(R, k), at(R + 2, k), at(R + 4, k)];
+          }
+          function bassStride(R, k) {
+            const a = at(R, k);
+            const b = at(R + 4, k);
+            const c = at(R + 2, k);
+            const d = at(R + 3, k);
+            return [a, b, c, a, b, a, c, b, a, d, c, b];
+          }
+          function randomLead(R, k, salt) {
+            const t0 = triad(R, k);
+            const pool = [t0[0], t0[1], t0[2], at(R + 1, k), at(R + 6, k), altHi[Math.abs(salt) % 5], altHi[(Math.abs(salt) + 2) % 5]];
+            const n = 7 + (Math.abs(salt) % 3);
+            const hits = [];
+            let tm = 80 + (Math.abs(salt) % 220);
+            for (let i = 0; i < n; i++) {
+              const slot = ((salt * 13 + i * 19) % pool.length) | 0;
+              hits.push({ c: pool[slot], t: tm });
+              tm += 420 + (((salt * 31 + i * 47) % 540) | 0);
+            }
+            hits.sort(function (u, v) {
+              return u.t - v.t;
+            });
+            return hits;
+          }
+          const progs = [
+            [0, 5, 3, 4],
+            [5, 3, 0, 4],
+            [0, 2, 5, 3],
+            [4, 0, 2, 5],
+            [0, 4, 3, 0],
+            [2, 5, 1, 4],
+            [0, 3, 6, 4],
+            [5, 0, 3, 4],
+            [1, 4, 0, 5],
+            [3, 0, 4, 5]
+          ];
+          const keyK = (Math.random() * 7) | 0;
+          const prog = progs[(Math.random() * progs.length) | 0];
+          const cycle = [];
+          for (let ci = 0; ci < 4; ci++) {
+            const R = prog[ci] | 0;
+            cycle.push({
+              bass: bassStride(R, keyK),
+              stabCodes: triad(R, keyK),
+              lead: randomLead(R, keyK, keyK * 31 + ci * 17 + prog[0] * 3 + ci * 5)
+            });
+          }
+          nocturneSessionChordCycle = cycle;
+          nocturneEnsemblePhrase = 0;
+          noctStabDelayPrimed = false;
+        }
 
         function playNocturneLatinDrumStep(step) {
           if (FmBellSynth.isEngineMuted()) return;
@@ -7504,7 +7480,9 @@
         /** Nocturne bass arpeggio (`bassNoctPsy_`): dedicated pocket-bass voice on dry NPC bus. */
         function playNocturnePsyBassPhrase(phraseIx) {
           if (FmBellSynth.isEngineMuted()) return;
-          const chord = NOCTURN_CHORD_CYCLE[phraseIx % NOCTURN_CHORD_CYCLE.length];
+          const cyc = nocturneSessionChordCycle;
+          if (!cyc || !cyc.length) return;
+          const chord = cyc[phraseIx % cyc.length];
           const parts = chord.bass;
           for (let i = 0; i < parts.length; i++) {
             const code = parts[i];
@@ -7525,7 +7503,9 @@
         /** Glass FM lead: same chord as bass for this phrase (`NOCTURN_CHORD_CYCLE`), voiced on chord tones in time. */
         function playNocturneLeadImprov(phraseIx) {
           if (FmBellSynth.isEngineMuted()) return;
-          const chord = NOCTURN_CHORD_CYCLE[phraseIx % NOCTURN_CHORD_CYCLE.length];
+          const cyc = nocturneSessionChordCycle;
+          if (!cyc || !cyc.length) return;
+          const chord = cyc[phraseIx % cyc.length];
           const hits = chord.lead;
           for (let i = 0; i < hits.length; i++) {
             const pick = hits[i].c;
@@ -7557,7 +7537,9 @@
               }
             } catch (ePr) {}
           }
-          const chord = NOCTURN_CHORD_CYCLE[phraseIx % NOCTURN_CHORD_CYCLE.length];
+          const cyc = nocturneSessionChordCycle;
+          if (!cyc || !cyc.length) return;
+          const chord = cyc[phraseIx % cyc.length];
           const codes = chord.stabCodes;
           if (!codes || codes.length < 3) return;
           const stabTimes = [85, 1960, 3720];
@@ -7583,6 +7565,7 @@
         function updateNpcs(dt) {
           if (!npcs.length) return;
           if (useNocturneMap) {
+            initNocturneSessionHarmonyOnce();
             const drumStepMs = 127;
             nocturneDrumAccumMs = (nocturneDrumAccumMs || 0) + dt * 1000;
             while (nocturneDrumAccumMs >= drumStepMs) {
