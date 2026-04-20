@@ -792,6 +792,28 @@
           useReefMap ||
           usePrimordiumMap ||
           useNocturneMap;
+        // Adaptive quality for iPad/mobile: reduce fill-rate + heavy geometry while keeping gameplay identical.
+        const IS_LOW_POWER = (function () {
+          try {
+            if (typeof navigator !== "undefined") {
+              const ua = String(navigator.userAgent || "");
+              if (/iPad|iPhone|iPod/i.test(ua)) return true;
+              // iPadOS 13+ reports as Mac but has touch points.
+              if (/Macintosh/i.test(ua) && (navigator.maxTouchPoints || 0) > 1) return true;
+            }
+          } catch (e) {}
+          try {
+            if (typeof window !== "undefined" && window.matchMedia) {
+              if (window.matchMedia("(pointer: coarse)").matches) return true;
+            }
+          } catch (e2) {}
+          return false;
+        })();
+        const QUALITY_SCALE = IS_LOW_POWER ? 0.72 : 1.0;
+        function qSeg(n, lo) {
+          const v = Math.floor(n * QUALITY_SCALE);
+          return Math.max(lo != null ? lo : 8, v);
+        }
         try {
           const q = new URLSearchParams(String(location.search || ""));
           const u = q.get("map");
@@ -801,7 +823,7 @@
         let renderer;
         try {
           renderer = new THREE.WebGLRenderer({
-            antialias: true,
+            antialias: !IS_LOW_POWER,
             stencil: true,
             alpha: false,
             premultipliedAlpha: false,
@@ -828,7 +850,7 @@
         renderer.setPixelRatio(
           Math.min(
             window.devicePixelRatio || 1,
-            useBoardMap ? 2 : useTesseractMap ? 1.7 : useArenaMap ? 1.78 : 1.55
+            IS_LOW_POWER ? 1.0 : useBoardMap ? 2 : useTesseractMap ? 1.7 : useArenaMap ? 1.78 : 1.55
           )
         );
         renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -1078,14 +1100,14 @@
             "}\n",
           toneMapped: false
         });
-        const cloudDome = new THREE.Mesh(new THREE.SphereGeometry(220, 24, 16), cloudMat);
+        const cloudDome = new THREE.Mesh(new THREE.SphereGeometry(220, qSeg(24, 12), qSeg(16, 8)), cloudMat);
         cloudDome.renderOrder = -1000;
         cloudDome.frustumCulled = false;
         scene.add(cloudDome);
 
         // High starfield above the clouds.
         const starGeom = new THREE.BufferGeometry();
-        const STAR_COUNT = 1400;
+        const STAR_COUNT = IS_LOW_POWER ? 700 : 1400;
         const starPos = new Float32Array(STAR_COUNT * 3);
         const starCol = new Float32Array(STAR_COUNT * 3);
         for (let i = 0; i < STAR_COUNT; i++) {
@@ -1943,7 +1965,7 @@
           }
           pos.needsUpdate = true;
           reefGroundNormalAccum += dt;
-          if (reefGroundNormalAccum >= 0.16) {
+          if (reefGroundNormalAccum >= (IS_LOW_POWER ? 0.28 : 0.16)) {
             reefGroundNormalAccum = 0;
             try {
               g.computeVertexNormals();
@@ -2398,7 +2420,7 @@
           const SEA_SURFACE_Y = GROUND_SURFACE_Y + WATER_SURFACE_LIFT + 0.12;
           const oceanExtent = Math.max(24000, mapBoardHalfExtent * 200);
           /** Tesselate so grazing-angle depth is stable (2 giant tris shimmer against the shore). */
-          const oceanSegs = 34;
+          const oceanSegs = IS_LOW_POWER ? 22 : 34;
           const oceanGeo = new THREE.PlaneGeometry(oceanExtent, oceanExtent, oceanSegs, oceanSegs);
           /** World units per seamless tile repeat on the sea plane (UV tiling). */
           const waterTileWorldSpan = 10.5;
@@ -3575,7 +3597,10 @@
               depthTest: true,
               side: THREE.DoubleSide
             });
-            const ground = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2, 64, 64), auroraSnowGroundMat);
+            const ground = new THREE.Mesh(
+              new THREE.PlaneGeometry(half * 2, half * 2, qSeg(64, 28), qSeg(64, 28)),
+              auroraSnowGroundMat
+            );
             ground.rotation.x = -Math.PI / 2;
             ground.position.y = GROUND_SURFACE_Y;
             ground.userData.tileKey = "aurora_ground";
@@ -3873,7 +3898,7 @@
             // Bottom half of a sphere, then scaled into a shallow oval "satellite dish" crater.
             const craterR = half * 1.05;
             const ground = new THREE.Mesh(
-              new THREE.SphereGeometry(craterR, 128, 64, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
+              new THREE.SphereGeometry(craterR, qSeg(128, 48), qSeg(64, 24), 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
               reefMoonGroundMat
             );
             ground.position.y = GROUND_SURFACE_Y;
@@ -4143,7 +4168,10 @@
               depthWrite: true,
               side: THREE.DoubleSide
             });
-            const ground = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2, 56, 56), nocturneForestGroundMat);
+            const ground = new THREE.Mesh(
+              new THREE.PlaneGeometry(half * 2, half * 2, qSeg(56, 24), qSeg(56, 24)),
+              nocturneForestGroundMat
+            );
             ground.rotation.x = -Math.PI / 2;
             ground.position.y = GROUND_SURFACE_Y;
             ground.userData.tileKey = "nocturne_peat";
@@ -4314,7 +4342,7 @@
             primordiumSlimeFollowers.length = 0;
             primordiumSlimeTerrainMesh = null;
             primordiumSlimeWaveTime = 0;
-            const plane = new THREE.PlaneGeometry(half * 2, half * 2, 44, 44);
+            const plane = new THREE.PlaneGeometry(half * 2, half * 2, qSeg(44, 20), qSeg(44, 20));
             plane.rotateX(-Math.PI / 2);
             const pos = plane.attributes.position;
             for (let i = 0; i < pos.count; i++) {
@@ -7394,7 +7422,7 @@
               const hz = FM_BELL_HZ[code];
               const idx = u.reefFloaterIndex != null ? u.reefFloaterIndex : 0;
               const patch = (idx * 11 + ((Math.random() * 997) | 0)) % 18;
-              const id = "npcBell_reef_click_" + reefFloatPolyBellSeq++ + "_" + idx;
+              const id = "npcBellRec_reef_click_" + reefFloatPolyBellSeq++ + "_" + idx;
               FmBellSynth.noteOn(id, hz, undefined, patch);
               setTimeout(function () {
                 try {
@@ -7424,7 +7452,7 @@
               const code = seq[step];
               const hz = FM_BELL_HZ[code];
               if (hz != null) {
-                const id = "npcBell_prim_" + primordialNexusSeq++;
+                const id = "npcBellRec_prim_" + primordialNexusSeq++;
                 const dur = (h.noteDur | 0) || 420;
                 FmBellSynth.noteOn(id, hz, undefined, h.npcPatch);
                 setTimeout(function () {
@@ -7468,7 +7496,7 @@
               ];
               const code = codes[step % codes.length];
               const hz = FM_BELL_HZ[code];
-              const id = "npcBell_prim_" + primordialNexusSeq++;
+              const id = "npcBellRec_prim_" + primordialNexusSeq++;
               FmBellSynth.noteOn(id, hz, undefined, (u.primordialStep * 11 + step * 3) % 18);
               setTimeout(function () {
                 FmBellSynth.noteOff(id);
@@ -7505,7 +7533,7 @@
           const code = codes[(Math.random() * codes.length) | 0];
           const hz = FM_BELL_HZ[code];
           const crySeq = greekCrystalBellSeq++;
-          const id = "npcBell_crys_" + crySeq;
+          const id = "npcBellRec_crys_" + crySeq;
           FmBellSynth.noteOn(id, hz, undefined, crySeq * 13 + ((Math.random() * 997) | 0));
           setTimeout(function () {
             FmBellSynth.noteOff(id);
@@ -7536,7 +7564,7 @@
               const ratios = [1, phi * 0.92, Math.PI * 0.48, ePart * 0.41, phi * phi * 0.31];
               for (let k = 0; k < ratios.length; k++) {
                 const hz = Math.min(3400, Math.max(38, base * ratios[k]));
-                const id = "npcBell_ob_" + seq + "_" + k;
+                const id = "npcBellRec_ob_" + seq + "_" + k;
                 const delay = k * 44;
                 (function (vid, fhz, kk) {
                   setTimeout(function () {
@@ -7629,6 +7657,8 @@
           let loopPlaying = false;
           let loopScheduledStartTime = 0;
           let loopStartOffsetSec = 0;
+          /** When overdubbing onto an existing loop, align captured audio to loop phase. */
+          let recStartOffsetSamples = 0;
           /** Layer new audio onto the existing loop until toggled off (= key); not tied to loop wrap. */
           let overdubActive = false;
           /** Overdub session armed: yellow until first drum/bass note, then records like the looper. */
@@ -8293,6 +8323,7 @@
               overdubArmed = false;
               looperRecording = false;
               recChunks = [];
+              recStartOffsetSamples = 0;
               updateRecordingAudioRoute();
               return;
             }
@@ -8303,11 +8334,13 @@
               const merged = mergeRecChunksToBuffer();
               const B = merged.getChannelData(0);
               const M = B.length;
-              const outLen = Math.max(L, M);
+              const offS = Math.max(0, recStartOffsetSamples | 0);
+              const outLen = Math.max(L, offS + M);
               const data = new Float32Array(outLen);
               for (let i = 0; i < outLen; i++) {
                 const a = old[i % L];
-                const b = i < M ? B[i] : 0;
+                const j = i - offS;
+                const b = j >= 0 && j < M ? B[j] : 0;
                 data[i] = Math.tanh((a + b) * 0.92);
               }
               polishLoopChannelData(data);
@@ -8319,6 +8352,7 @@
             overdubActive = false;
             overdubArmed = false;
             looperRecording = false;
+            recStartOffsetSamples = 0;
             updateRecordingAudioRoute();
             if (hadNewAudio && loopPlaying && loopGainNode) {
               swapLoopBufferSeamless(loopBuffer);
@@ -8444,6 +8478,21 @@
               overdubArmed = false;
               looperRecording = true;
               recChunks = [];
+              // Capture loop-phase offset so overdub merges at the right point in the cycle.
+              try {
+                const now = ctx.currentTime;
+                const dur = loopBuffer.duration || 0;
+                let posSec = loopStartOffsetSec + (now - loopScheduledStartTime);
+                if (dur > 1e-6) {
+                  posSec = posSec % dur;
+                  if (posSec < 0) posSec += dur;
+                } else {
+                  posSec = 0;
+                }
+                recStartOffsetSamples = Math.max(0, Math.floor(posSec * ctx.sampleRate));
+              } catch (e) {
+                recStartOffsetSamples = 0;
+              }
               updateRecordingAudioRoute();
               return;
             }
@@ -8451,6 +8500,7 @@
             looperArmed = false;
             looperRecording = true;
             recChunks = [];
+            recStartOffsetSamples = 0;
             updateRecordingAudioRoute();
           }
 
@@ -9044,10 +9094,16 @@
             if (voices.has(voiceId)) noteOff(voiceId);
 
             const isNpcBell = voiceId.startsWith("npcBell");
+            const isRecNpcBell = voiceId.startsWith("npcBellRec_");
             const isNoctLead = voiceId.startsWith("noctLead_");
             const isNoctBass = voiceId.startsWith("bassNoctPsy_");
             const isNoctStab = voiceId.startsWith("noctStab_");
-            if (isNpcBell) trimVoicesByPrefix("npcBell_", 12);
+            // Interactable bells should be able to start capture when the looper/overdub is armed.
+            if (isRecNpcBell) beginLooperCaptureIfArmed();
+            if (isNpcBell) {
+              trimVoicesByPrefix("npcBell_", 12);
+              trimVoicesByPrefix("npcBellRec_", 12);
+            }
             else if (isNoctBass) trimVoicesByPrefix("bassNoctPsy_", 10);
             else if (voiceId.startsWith("bass_")) trimVoicesByPrefix("bass_", 10);
             else if (isNoctLead) trimVoicesByPrefix("noctLead_", 10);
@@ -9090,6 +9146,8 @@
               ampGain.gain.exponentialRampToValueAtTime(0.0001, t + (P.aDecT != null ? P.aDecT : 2.15));
 
               carrier.connect(ampGain);
+              const dryBus = isRecNpcBell ? playerDry : npcDry;
+              const wetBus = isRecNpcBell ? playerConv : npcConv;
               if (P.pk) {
                 const pk = P.pk;
                 resPeak = audio.createBiquadFilter();
@@ -9103,11 +9161,11 @@
                 resPeak.gain.linearRampToValueAtTime(g1, t + 0.0075);
                 resPeak.gain.linearRampToValueAtTime(g2, t + 0.072);
                 ampGain.connect(resPeak);
-                resPeak.connect(npcDry);
-                resPeak.connect(npcConv);
+                resPeak.connect(dryBus);
+                resPeak.connect(wetBus);
               } else {
-                ampGain.connect(npcDry);
-                ampGain.connect(npcConv);
+                ampGain.connect(dryBus);
+                ampGain.connect(wetBus);
               }
             } else if (isNoctLead) {
               // Rhodes / EP-inspired: sine tine FM, soft index, dry forward mix (neo-soul keyboard reference).
@@ -11849,7 +11907,7 @@
             const gySurf = GROUND_SURFACE_Y;
             // Floaters should "hang" from the moving crater surface rather than a flat plane.
             // Amortize surface sampling (raycasts) across frames for performance.
-            const followUpdates = Math.min(28, reefFloatPolyMeshes.length);
+            const followUpdates = Math.min(IS_LOW_POWER ? 14 : 28, reefFloatPolyMeshes.length);
             for (let fu = 0; fu < followUpdates; fu++) {
               const fi = (reefFloaterFollowCursor++ % reefFloatPolyMeshes.length) | 0;
               const fm = reefFloatPolyMeshes[fi];
